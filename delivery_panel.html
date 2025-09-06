@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UniFood - Delivery Panel</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/feather-icons"></script>
+    <!-- Added libraries for QR Code and PDF generation -->
+    <script src="https://cdn.jsdelivr.net/gh/davidshimjs/qrcodejs/qrcode.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+
+    <style>
+        :root {
+            --primary-color: #1a202c;
+            --secondary-color: #D4AF37;
+        }
+        html, body { height: 100%; }
+        body { 
+            font-family: 'Manrope', sans-serif; 
+            background-color: #F8F9FA;
+            display: flex;
+            flex-direction: column;
+        }
+        #app-container {
+            flex: 1 0 auto;
+            display: flex;
+            flex-direction: column;
+        }
+        #main-content {
+            flex: 1 0 auto;
+        }
+        h1, h2, h3, h4, .font-serif { font-family: 'Playfair Display', serif; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .fade-in { animation: fadeIn 0.5s ease-out forwards; }
+        .auth-container { min-height: 100vh; background-size: cover; background-position: center; }
+        .auth-card { background-color: rgba(255, 255, 255, 0.97); backdrop-filter: blur(10px); }
+        .btn { transition: all 0.3s ease; }
+        .btn:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); }
+        .btn-primary { background-color: var(--primary-color); color: #ffffff; }
+        .btn-secondary { background-color: var(--secondary-color); color: #ffffff; }
+        .btn-danger { background-color: #E53935; color: #ffffff; }
+        .input-field { background-color: #F1F3F5; border: 2px solid transparent; transition: all 0.3s ease; }
+        .input-field:focus { background-color: #fff; border-color: var(--secondary-color); box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.2); }
+        
+        .sidebar-link { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; border-radius: 0.5rem; transition: all 0.2s ease; font-weight: 500; color: #4A5568; }
+        .sidebar-link:hover { background-color: #EDF2F7; color: #1A202C; }
+        .sidebar-link.active { background-color: var(--primary-color); color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        
+        .mobile-nav-link { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0.5rem 0; color: #4A5568; transition: all 0.2s ease; }
+        .mobile-nav-link.active { color: var(--primary-color); }
+        
+        .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.6); display: flex; align-items: center; justify-content: center; z-index: 1000; opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
+        .modal-overlay.active { opacity: 1; pointer-events: auto; }
+        .modal-content { background: white; padding: 1.5rem; border-radius: 1rem; max-width: 650px; width: 90%; max-height: 90vh; overflow-y: auto; transform: scale(0.95); transition: transform 0.3s ease; }
+        .modal-overlay.active .modal-content { transform: scale(1); }
+        
+        #mobile-menu-overlay { transition: opacity 0.3s ease-in-out; }
+    </style>
+    <script src="delivery_panel.js" defer></script>
+</head>
+<body class="antialiased text-gray-800">
+
+    <div id="maintenance-overlay" class="hidden items-center justify-center text-center p-8 fixed inset-0 bg-gray-100 z-[9999]">
+        <div>
+            <i data-feather="tool" class="w-16 h-16 mx-auto text-gray-500"></i>
+            <h1 class="text-4xl font-bold font-serif mt-4">Under Maintenance</h1>
+            <p class="text-gray-600 mt-2">We are currently performing maintenance. Please check back later.</p>
+        </div>
+    </div>
+
+    <header class="bg-white shadow-sm p-4 flex justify-between items-center sticky top-0 z-50" style="display: none;">
+        <div class="flex items-center gap-4">
+            <img id="website-logo-header" src="https://placehold.co/100x40?text=UniFood" alt="Logo" class="h-8 md:h-10">
+            <h1 id="website-name-header" class="text-2xl md:text-3xl font-bold text-gray-800 font-serif">UniFood</h1>
+        </div>
+        <div class="hidden md:flex items-center gap-4">
+            <div id="user-info" class="text-right"></div>
+            <button id="logout-btn" class="btn btn-primary text-white font-bold py-2 px-4 rounded-lg flex items-center gap-2"><i data-feather="log-out" class="w-4 h-4"></i>Logout</button>
+        </div>
+        <div class="md:hidden">
+            <button id="mobile-menu-button" class="p-2">
+                <i data-feather="menu" class="w-6 h-6"></i>
+            </button>
+        </div>
+    </header>
+    
+    <div id="mobile-menu-overlay" class="fixed inset-0 bg-black bg-opacity-50 z-[1001] hidden">
+        <div id="mobile-menu" class="fixed top-0 right-0 h-full w-64 bg-white shadow-lg p-6 transform translate-x-full transition-transform duration-300 ease-in-out">
+            <button id="close-mobile-menu" class="absolute top-4 right-4 p-2">
+                <i data-feather="x" class="w-6 h-6"></i>
+            </button>
+            <div id="mobile-user-info" class="text-left mb-8"></div>
+            <button id="mobile-logout-btn" class="btn btn-primary w-full mt-8 flex items-center justify-center gap-2"><i data-feather="log-out" class="w-4 h-4"></i>Logout</button>
+        </div>
+    </div>
+
+    <div id="auth-container" class="auth-container p-4 flex items-center justify-center">
+        <div class="w-full max-w-md p-8 md:p-12 rounded-2xl shadow-2xl auth-card"></div>
+    </div>
+
+    <div id="app-container" class="hidden">
+        <div id="announcement-banner-container"></div>
+        <main id="main-content" class="p-4 md:p-8 max-w-7xl mx-auto w-full"></main>
+    </div>
+
+    <template id="login-form-template">
+        <form id="login-form" class="space-y-6 fade-in">
+            <div class="text-center"><h2 class="text-3xl md:text-4xl font-bold text-gray-800 font-serif">Delivery Partner Login</h2><p class="text-gray-600 mt-2">Sign in to start your deliveries.</p></div>
+            <div><label for="email" class="block text-sm font-medium text-gray-700">Email</label><input type="email" id="email" class="input-field mt-1 block w-full rounded-lg py-3 px-4" required></div>
+            <div><label for="password" class="block text-sm font-medium text-gray-700">Password</label><input type="password" id="password" class="input-field mt-1 block w-full rounded-lg py-3 px-4" required></div>
+            <button type="submit" class="btn btn-primary w-full text-white font-bold py-3 rounded-lg">Login</button>
+            <div id="login-error" class="text-red-500 text-center text-sm h-4"></div>
+        </form>
+    </template>
+
+    <template id="delivery-portal-template">
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-8">
+            <aside class="hidden lg:block lg:col-span-1 bg-white p-4 rounded-xl shadow-md self-start sticky top-28">
+                <h3 class="text-xl font-bold font-serif mb-6 px-4">Delivery Panel</h3>
+                <nav id="delivery-nav" class="space-y-1">
+                    <button class="w-full text-left sidebar-link active" data-view="available-orders"><i data-feather="zap"></i>Available</button>
+                    <button class="w-full text-left sidebar-link" data-view="assigned-orders"><i data-feather="list"></i>My Deliveries</button>
+                    <button class="w-full text-left sidebar-link" data-view="delivery-history"><i data-feather="archive"></i>History</button>
+                    <button class="w-full text-left sidebar-link" data-view="earnings"><i data-feather="dollar-sign"></i>Earnings</button>
+                    <button class="w-full text-left sidebar-link" data-view="reviews"><i data-feather="star"></i>Reviews</button>
+                    <button class="w-full text-left sidebar-link" data-view="profile"><i data-feather="user"></i>Profile</button>
+                </nav>
+            </aside>
+            <main id="delivery-main-content" class="lg:col-span-3 pb-20 lg:pb-0">
+                <!-- Main content for delivery views -->
+            </main>
+            <nav id="mobile-delivery-nav" class="lg:hidden fixed bottom-0 left-0 right-0 bg-white shadow-[0_-2px_10px_rgba(0,0,0,0.1)] flex justify-around z-50">
+                <button class="mobile-nav-link active" data-view="available-orders"><i data-feather="zap"></i><span class="text-xs mt-1">Available</span></button>
+                <button class="mobile-nav-link" data-view="assigned-orders"><i data-feather="list"></i><span class="text-xs mt-1">My Orders</span></button>
+                <button class="mobile-nav-link" data-view="delivery-history"><i data-feather="archive"></i><span class="text-xs mt-1">History</span></button>
+                <button class="mobile-nav-link" data-view="profile"><i data-feather="user"></i><span class="text-xs mt-1">Profile</span></button>
+            </nav>
+        </div>
+    </template>
+
+    <div id="modal-container" class="modal-overlay"></div>
+    
+</body>
+</html>
