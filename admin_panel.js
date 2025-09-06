@@ -903,7 +903,6 @@ async function renderAdminMenuManagementView(restaurantId) {
            return;
         }
 
-        // --- NEW: Logic to group items by category ---
         const groupedItems = {};
         snapshot.docs.forEach(doc => {
             const itemData = doc.data();
@@ -961,10 +960,9 @@ function renderMenuItemCard(doc, restaurantId) {
     `;
 }
 
-// MODIFIED: This function is now async and completely rewritten for a dynamic dropdown.
 async function showMenuItemForm(restaurantId, itemId = null) {
     const isEditing = itemId !== null;
-    let item = { name: '', description: '', imageUrl: '', category: '', variants: [{ name: '', price: '' }] };
+    let item = { name: '', description: '', imageUrl: '', category: '', isVeg: false, variants: [{ name: '', price: '' }] };
     if (isEditing) {
         const itemDoc = await db.collection('restaurants').doc(restaurantId).collection('menu').doc(itemId).get();
         if (itemDoc.exists) {
@@ -973,7 +971,6 @@ async function showMenuItemForm(restaurantId, itemId = null) {
         }
     }
 
-    // --- NEW: Fetch categories from the master collection ---
     const categoriesSnapshot = await db.collection('menuCategories').orderBy('name').get();
     const categoryOptions = categoriesSnapshot.docs.map(doc => {
         const categoryName = doc.data().name;
@@ -1002,6 +999,12 @@ async function showMenuItemForm(restaurantId, itemId = null) {
             </div>
 
             <textarea name="description" class="input-field w-full" rows="2" placeholder="Description">${item.description || ''}</textarea>
+            
+            <div class="flex items-center">
+                <input type="checkbox" id="is-veg-checkbox" name="isVeg" class="h-4 w-4 rounded border-gray-300 text-green-600 focus:ring-green-500" ${item.isVeg ? 'checked' : ''}>
+                <label for="is-veg-checkbox" class="ml-2 block text-sm text-gray-900">This item is Vegetarian</label>
+            </div>
+
             <div>
                 <label class="block text-sm font-medium">Image URL</label>
                 <input type="url" name="imageUrl" class="input-field w-full" placeholder="Image URL" value="${item.imageUrl || ''}">
@@ -1028,7 +1031,6 @@ async function showMenuItemForm(restaurantId, itemId = null) {
     `;
     showModal(formHtml);
 
-    // --- NEW: Event listener to handle the "Add New" selection ---
     const categorySelect = document.querySelector('#menu-item-form select[name="category"]');
     const newCategoryContainer = document.getElementById('new-category-container');
     const newCategoryInput = document.querySelector('#menu-item-form input[name="newCategoryName"]');
@@ -1060,12 +1062,10 @@ async function showMenuItemForm(restaurantId, itemId = null) {
         }
     });
 
-    // MODIFIED: We now call a named function to handle the complex save logic.
     document.getElementById('menu-item-form').addEventListener('submit', handleSaveMenuItem);
 }
 
 
-// NEW: This function handles the logic for saving a menu item, including adding new categories.
 async function handleSaveMenuItem(e) {
     e.preventDefault();
     const form = e.target;
@@ -1075,14 +1075,12 @@ async function handleSaveMenuItem(e) {
     const selectedCategoryValue = form.elements.category.value;
     let finalCategoryName = '';
 
-    // Check if the user is adding a new category
     if (selectedCategoryValue === 'add_new') {
         const newCategoryName = form.elements.newCategoryName.value.trim();
         if (!newCategoryName) {
             showToast("New category name cannot be empty.", "error");
             return;
         }
-        // Save the new category to the master collection
         await db.collection('menuCategories').add({ name: newCategoryName });
         finalCategoryName = newCategoryName;
         showToast(`New category "${newCategoryName}" created!`, 'success');
@@ -1100,17 +1098,18 @@ async function handleSaveMenuItem(e) {
 
     const data = {
         name: form.elements.name.value,
-        category: finalCategoryName, // Use the final determined category name
+        category: finalCategoryName,
         description: form.elements.description.value,
         imageUrl: form.elements.imageUrl.value,
+        isVeg: form.elements.isVeg.checked, // Save the veg status
         variants: variants,
         price: variants[0] ? variants[0].price : 0,
     };
 
-    if (itemId) { // Editing an existing item
+    if (itemId) {
         await db.collection('restaurants').doc(restaurantId).collection('menu').doc(itemId).update(data);
         showToast("Menu item updated!");
-    } else { // Adding a new item
+    } else {
         await db.collection('restaurants').doc(restaurantId).collection('menu').add(data);
         showToast("New menu item added!");
     }
@@ -1541,8 +1540,6 @@ function downloadBillAsPDF(orderId) {
 }
 
 // ----- NEW ADVERTISEMENT MANAGEMENT FUNCTIONS -----
-
-// RENAME and REWRITE renderSettingsView to renderAdvertisementsView
 async function renderAdvertisementsView(contentArea) {
     contentArea.innerHTML = `
         <div class="flex justify-between items-center mb-6">
@@ -1558,7 +1555,6 @@ async function renderAdvertisementsView(contentArea) {
     const listEl = document.getElementById('advertisements-list');
     listEl.innerHTML = '<p>Loading advertisements...</p>';
 
-    // Fetch all documents from the new 'advertisements' collection
     const snapshot = await db.collection('advertisements').orderBy('createdAt', 'desc').get();
 
     if (snapshot.empty) {
@@ -1566,7 +1562,6 @@ async function renderAdvertisementsView(contentArea) {
         return;
     }
 
-    // Fetch all restaurant names for mapping
     const restaurantsSnapshot = await db.collection('restaurants').get();
     const restaurantMap = new Map(restaurantsSnapshot.docs.map(doc => [doc.id, doc.data().name]));
 
@@ -1593,7 +1588,6 @@ async function renderAdvertisementsView(contentArea) {
     feather.replace();
 }
 
-// NEW function to show a modal form for adding/editing an ad
 async function showAdvertisementForm(adId = null) {
     const isEditing = adId !== null;
     let adData = { imageUrl: '', restaurantId: '', isEnabled: true };
@@ -1647,7 +1641,6 @@ async function showAdvertisementForm(adId = null) {
     document.getElementById('ad-form').addEventListener('submit', handleSaveAdvertisement);
 }
 
-// NEW handler for the add/edit form submission
 async function handleSaveAdvertisement(e) {
     e.preventDefault();
     const form = e.target;
@@ -1679,7 +1672,6 @@ async function handleSaveAdvertisement(e) {
     }
 }
 
-// NEW delete handler for a specific advertisement
 function handleDeleteAdvertisement(adId) {
     showConfirmationModal(
         "Delete Advertisement?",
@@ -1748,7 +1740,7 @@ async function renderAdminProfileView(contentArea) {
     });
 }
 
-// --- NEW: Toast Notification Function ---
+// --- UTILITY FUNCTIONS ---
 function showToast(message, type = 'success') {
     const container = document.getElementById('toast-container');
     if (!container) return;
@@ -1775,7 +1767,7 @@ function showToast(message, type = 'success') {
         toast.classList.remove('toast-enter');
         toast.classList.add('toast-exit');
         toast.addEventListener('animationend', () => toast.remove());
-    }, 4000); // Stays for 4 seconds
+    }, 4000);
 }
 
 function showModal(contentHtml) {
