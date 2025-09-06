@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UniFood - Premium Food Delivery</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/feather-icons"></script>
+    <script src="https://cdn.jsdelivr.net/gh/davidshimjs/qrcodejs/qrcode.min.js"></script>
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+
+    <style>
+        :root {
+            --primary-color: #1a202c;
+            --secondary-color: #D4AF37;
+            --background-color: #F8F9FA; /* New */
+            --text-color: #1f2937;       /* New */
+            --header-bg: #ffffff;        /* New */
+            --button-text-color: #ffffff;/* New */
+            --secondary-glow: rgba(234, 193, 77, 0.8);
+            --secondary-glow-soft: rgba(234, 193, 77, 0.5);
+        }
+        html, body { height: 100%; }
+        body { 
+            font-family: 'Manrope', sans-serif; 
+            background-color: var(--background-color); /* Updated */
+            color: var(--text-color); /* Updated */
+            display: flex;
+            flex-direction: column;
+        }
+        header { background: var(--header-bg); } /* Updated */
+        #app-container {
+            flex: 1 0 auto;
+            display: flex;
+            flex-direction: column;
+        }
+        #main-content {
+            flex: 1 0 auto;
+        }
+        h1, h2, h3, h4, .font-serif { font-family: 'Playfair Display', serif; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .fade-in { animation: fadeIn 0.5s ease-out forwards; }
+        
+        /* Glowing Animation */
+        @keyframes neon-glow {
+          from {
+            box-shadow: 0 0 5px var(--secondary-glow-soft), 0 0 10px var(--secondary-glow-soft);
+          }
+          to {
+            box-shadow: 0 0 10px var(--secondary-glow), 0 0 20px var(--secondary-glow);
+          }
+        }
+        
+        /* Toast Notification Animations */
+        @keyframes slideInUp {
+            from { transform: translateY(100%); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        @keyframes fadeOut {
+            from { opacity: 1; }
+            to { opacity: 0; }
+        }
+        .toast-enter { animation: slideInUp 0.5s ease-out forwards; }
+        .toast-exit { animation: fadeOut 0.5s ease-in forwards; }
+
+        .auth-container { min-height: 100vh; background-size: cover; background-position: center; }
+        .auth-card { background-color: rgba(255, 255, 255, 0.97); backdrop-filter: blur(10px); }
+        .btn { transition: all 0.3s ease; }
+        .btn:hover { 
+            transform: translateY(-3px); 
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1), 0 3px 6px rgba(0, 0, 0, 0.08);
+        }
+        .btn-primary { background-color: var(--primary-color); color: var(--button-text-color); } /* Updated */
+        .btn-secondary { 
+            background-color: var(--secondary-color);
+            background-image: linear-gradient(to right, #D4AF37 0%, #EAC14D 51%, #D4AF37 100%);
+            background-size: 200% auto;
+            color: var(--button-text-color); /* Updated */
+            box-shadow: 0 4px 15px 0 rgba(212, 175, 55, 0.3);
+        }
+        .btn-secondary:hover {
+             background-position: right center;
+        }
+        .btn-danger { background-color: #E53935; color: #ffffff; }
+
+        .input-field { background-color: #F1F3F5; border: 1px solid transparent; transition: all 0.3s ease; }
+        #global-search-bar, #mobile-global-search-bar {
+             border: 1px solid rgba(212, 175, 55, 0.4);
+             box-shadow: 0 0 4px rgba(234, 193, 77, 0.4);
+        }
+        .input-field:focus { 
+            background-color: #fff; 
+            border-color: var(--secondary-color); 
+            box-shadow: 0 0 6px var(--secondary-glow), 0 0 12px rgba(234, 193, 77, 0.5); 
+        }
+        
+        .sidebar-link { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; border-radius: 0.5rem; transition: all 0.2s ease; font-weight: 500; color: #4A5568; }
+        .sidebar-link:hover { background-color: #EDF2F7; color: #1A202C; transform: translateX(4px); }
+        .sidebar-link.active { background-color: var(--primary-color); color: var(--button-text-color); box-shadow: 0 4px 12px rgba(0,0,0,0.1); } /* Updated */
+
+        .restaurant-card {
+            clip-path: polygon(0 0, 100% 0, 100% calc(100% - 30px), calc(100% - 30px) 100%, 0 100%);
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            border: 1px solid var(--secondary-color);
+            background-clip: padding-box;
+            animation: neon-glow 1.5s infinite alternate ease-in-out;
+        }
+        .restaurant-card:hover {
+            animation-play-state: paused;
+            box-shadow: 0 0 12px var(--secondary-glow), 0 0 24px var(--secondary-glow);
+            transform: translateY(-5px) scale(1.02);
+        }
+
+        /* Styles for Circular Featured Restaurants */
+        .featured-restaurant-card {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            width: 150px; /* Circle diameter */
+            cursor: pointer;
+            transition: transform 0.3s ease;
+        }
+        .featured-restaurant-card:hover {
+            transform: scale(1.05);
+        }
+        .featured-restaurant-card .img-container {
+            width: 120px; /* Image diameter */
+            height: 120px;
+            border-radius: 50%;
+            overflow: hidden;
+            margin-bottom: 0.75rem;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            border: 3px solid white;
+        }
+        .featured-restaurant-card img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform 0.3s ease;
+        }
+        .featured-restaurant-card:hover img {
+            transform: scale(1.1);
+        }
+
+        /* --- Styles for Beautiful Advertisement Carousel --- */
+        #advertisement-container {
+            position: relative;
+            padding-bottom: 2rem; /* Space for dots */
+        }
+        .advertisement-carousel-wrapper {
+            position: relative;
+            width: 100%;
+            height: 200px; /* Adjust height as needed */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            perspective: 1000px; /* Creates a 3D space for cards */
+        }
+        .advertisement-card {
+            position: absolute; /* All cards are stacked in the same spot */
+            width: 320px; /* Or your desired width */
+            aspect-ratio: 16 / 9;
+            border-radius: 0.75rem;
+            overflow: hidden;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            cursor: pointer;
+            /* Beautiful transition for multiple properties */
+            transition: transform 0.6s cubic-bezier(0.25, 0.8, 0.25, 1),
+                        opacity 0.6s ease,
+                        filter 0.6s ease;
+        }
+        .advertisement-card img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        /* --- Card States --- */
+        .advertisement-card.active {
+            transform: translateX(0) scale(1);
+            opacity: 1;
+            z-index: 10;
+            filter: blur(0px);
+        }
+        .advertisement-card.prev {
+            transform: translateX(-50%) scale(0.8);
+            opacity: 0.6;
+            z-index: 5;
+            filter: blur(1px);
+        }
+        .advertisement-card.next {
+            transform: translateX(50%) scale(0.8);
+            opacity: 0.6;
+            z-index: 5;
+            filter: blur(1px);
+        }
+        .advertisement-card.hidden-prev {
+            transform: translateX(-100%) scale(0.7);
+            opacity: 0;
+            z-index: 1;
+            filter: blur(3px);
+        }
+        .advertisement-card.hidden-next {
+            transform: translateX(100%) scale(0.7);
+            opacity: 0;
+            z-index: 1;
+            filter: blur(3px);
+        }
+
+        /* --- Navigation Dots --- */
+        .carousel-dots {
+            position: absolute;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 0.75rem;
+        }
+        .carousel-dots .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background-color: #ccc;
+            cursor: pointer;
+            transition: background-color 0.3s ease, transform 0.3s ease;
+        }
+        .carousel-dots .dot:hover {
+            transform: scale(1.2);
+        }
+        .carousel-dots .dot.active {
+            background-color: var(--primary-color);
+            transform: scale(1.3);
+        }
+
+        /* --- Desktop-specific sizing for Carousel --- */
+        @media (min-width: 768px) { /* This code only applies to screens 768px and wider (tablets/desktops) */
+            .advertisement-carousel-wrapper {
+                height: 280px; /* Increased from 200px */
+            }
+            .advertisement-card {
+                width: 480px;  /* Increased from 320px */
+            }
+        }
+        
+        .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.6); display: flex; align-items: center; justify-content: center; z-index: 1000; opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
+        .modal-overlay.active { opacity: 1; pointer-events: auto; }
+        .modal-content { background: white; padding: 1.5rem; border-radius: 1rem; max-width: 650px; width: 90%; max-height: 90vh; overflow-y: auto; transform: scale(0.95); transition: transform 0.3s ease; }
+        .modal-overlay.active .modal-content { transform: scale(1); }
+        #maintenance-overlay { display: none; position: fixed; inset: 0; background-color: #F8F9FA; z-index: 9999; }
+        
+        #cart-button { position: fixed; bottom: 4.8rem; right: 1.5rem; z-index: 999; }
+        #cart-count { position: absolute; top: -0.5rem; right: -0.5rem; background-color: #E53935; color: white; border-radius: 50%; width: 1.5rem; height: 1.5rem; display: flex; align-items: center; justify-content: center; font-size: 0.8rem; font-weight: bold; }
+        
+        #mobile-menu-overlay { transition: opacity 0.3s ease-in-out; }
+        
+        .rating .star { cursor: pointer; color: #d1d5db; transition: color 0.2s; }
+        .rating .star:hover, .rating .star.selected { color: #f59e0b; }
+        
+        @media print {
+            body * { visibility: hidden; }
+            #printable-bill, #printable-bill * { visibility: visible; }
+            #printable-bill { position: absolute; left: 0; top: 0; width: 100%; }
+            .no-print { display: none; }
+        }
+
+        /* --- Styles for Animated Order Button --- */
+        .animated-order-btn {
+            position: relative;
+            overflow: hidden;
+            border: none;
+            padding: 1rem 2.5rem;
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--button-text-color);
+            background-color: var(--primary-color);
+            border-radius: 50px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            outline: none;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            height: 60px;
+        }
+        .animated-order-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+        }
+        .animated-order-btn:disabled {
+            cursor: not-allowed;
+            opacity: 0.8;
+        }
+        .animated-order-btn .btn-text {
+            transition: opacity 0.2s ease-in-out;
+        }
+        .animated-order-btn .animation-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            opacity: 0;
+            pointer-events: none;
+            perspective: 800px;
+        }
+        .animated-order-btn .delivery-svg {
+            position: absolute;
+            width: 110px;
+            height: 110px;
+            transform-style: preserve-3d;
+            transform: translateX(-120px) rotateY(-30deg);
+        }
+        .animated-order-btn .road-lines {
+            position: absolute;
+            bottom: 10px;
+            left: 0;
+            width: 200%;
+            height: 4px;
+            background-image: linear-gradient(to right, white 50%, transparent 50%);
+            background-size: 40px 4px;
+        }
+        .animated-order-btn.animating .btn-text {
+            opacity: 0;
+        }
+        .animated-order-btn.animating .animation-container {
+            opacity: 1;
+        }
+        .animated-order-btn.animating .delivery-svg {
+            animation: ride 2.5s ease-in-out forwards;
+        }
+        .animated-order-btn.animating .road-lines {
+            animation: move-road 0.4s linear infinite;
+        }
+        @keyframes ride {
+            0% { transform: translateX(-120px) rotateY(-30deg); }
+            20% { transform: translateX(-10px) rotateY(-20deg) translateY(-3px); }
+            80% { transform: translateX(170px) rotateY(20deg) translateY(0px); }
+            100% { transform: translateX(240px) rotateY(30deg); }
+        }
+        @keyframes move-road {
+            from { transform: translateX(0); }
+            to { transform: translateX(-80px); }
+        }
+    </style>
+     <script src="customer_panel.js" defer></script>
+</head>
+<body class="antialiased text-gray-800">
+
+    <div id="maintenance-overlay" class="flex items-center justify-center text-center p-8">
+        <div>
+            <i data-feather="tool" class="w-16 h-16 mx-auto text-gray-500"></i>
+            <h1 class="text-4xl font-bold font-serif mt-4">Under Maintenance</h1>
+            <p class="text-gray-600 mt-2">We are currently performing maintenance. Please check back later.</p>
+        </div>
+    </div>
+
+    <header class="bg-white shadow-sm p-4 flex justify-between items-center gap-2 sticky top-0 z-50" style="display: none;">
+        <div class="flex items-center gap-2 flex-1 min-w-0">
+            <img id="website-logo-header" src="https://placehold.co/100x40?text=UniFood" alt="Logo" class="h-8 md:h-10 flex-shrink-0">
+            <h1 id="website-name-header" class="text-xl md:text-3xl font-bold text-gray-800 font-serif truncate">UniFood</h1>
+        </div>
+
+        <div id="global-search-container" class="hidden md:flex flex-grow max-w-xl mx-4">
+             <div class="relative w-full">
+                <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none"><i data-feather="search" class="w-5 h-5 text-gray-400"></i></div>
+                <input type="search" id="global-search-bar" class="input-field w-full p-2.5 pl-12 rounded-full" placeholder="Search food, restaurants, orders...">
+             </div>
+        </div>
+
+        <div class="hidden md:flex items-center gap-4 flex-shrink-0">
+            <div id="user-info" class="text-right"></div>
+            <button id="logout-btn" class="btn btn-primary text-white font-bold py-2 px-4 rounded-lg flex items-center gap-2">
+                <i data-feather="log-out" class="w-4 h-4"></i><span>Logout</span>
+            </button>
+        </div>
+
+        <div class="md:hidden flex items-center flex-shrink-0">
+            <button id="mobile-search-button" class="p-2">
+                <i data-feather="search" class="w-6 h-6"></i>
+            </button>
+            <button id="mobile-menu-button" class="p-2">
+                <i data-feather="menu" class="w-6 h-6"></i>
+            </button>
+        </div>
+    </header>
+
+    <div id="mobile-search-container" class="p-4 bg-white shadow-md md:hidden hidden">
+         <div class="relative w-full">
+            <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none"><i data-feather="search" class="w-5 h-5 text-gray-400"></i></div>
+            <input type="search" id="mobile-global-search-bar" class="input-field w-full p-2.5 pl-12 rounded-full" placeholder="Search food, restaurants, orders...">
+         </div>
+    </div>
+    
+    <div id="mobile-menu-overlay" class="fixed inset-0 bg-black bg-opacity-50 z-[1001] hidden opacity-0">
+        <div id="mobile-menu" class="fixed top-0 right-0 h-full w-72 bg-white shadow-lg p-6 transform translate-x-full transition-transform duration-300 ease-in-out">
+            <button id="close-mobile-menu" class="absolute top-4 right-4 p-2">
+                <i data-feather="x" class="w-6 h-6"></i>
+            </button>
+            <div id="mobile-user-info" class="text-left mb-8"></div>
+            <nav id="mobile-nav-links" class="flex flex-col gap-2"></nav>
+            <button id="mobile-logout-btn" class="btn btn-primary w-full mt-8 flex items-center justify-center gap-2">
+                <i data-feather="log-out" class="w-4 h-4"></i><span>Logout</span>
+            </button>
+        </div>
+    </div>
+
+
+    <div id="auth-container" class="auth-container p-4 flex items-center justify-center">
+        <div class="w-full max-w-md p-8 md:p-12 rounded-2xl shadow-2xl auth-card"></div>
+    </div>
+
+    <div id="app-container" class="hidden">
+        <div id="announcement-banner-container"></div>
+        <main id="main-content" class="p-4 md:p-8 max-w-7xl mx-auto w-full"></main>
+    </div>
+
+    <button id="cart-button" class="btn btn-secondary p-4 rounded-full shadow-lg hidden">
+        <i data-feather="shopping-cart" class="w-6 h-6"></i>
+        <span id="cart-count">0</span>
+    </button>
+    
+    <div id="ai-chatbot-container" class="fixed bottom-20 left-8 z-[1000]">
+        <button id="chatbot-toggle" class="btn btn-primary p-4 rounded-full shadow-lg hover:transform hover:scale-110 transition-transform">
+            <i data-feather="message-square" class="w-6 h-6"></i>
+        </button>
+        <div id="chatbot-window" class="hidden absolute bottom-20 left-0 w-80 bg-white rounded-xl shadow-2xl overflow-hidden">
+            <div class="bg-gray-100 p-3 font-bold text-center">UniFood AI Assistant</div>
+            <div id="chatbot-messages" class="p-4 h-96 overflow-y-auto">
+                <div class="text-sm p-2 bg-gray-100 rounded-lg">Hello! How can I help you today?</div>
+            </div>
+            <div class="p-2 border-t">
+                <input type="text" id="chatbot-input" class="input-field w-full text-sm" placeholder="Ask me anything...">
+            </div>
+        </div>
+    </div>
+
+    <template id="login-form-template">
+        <form id="login-form" class="space-y-6 fade-in">
+            <div class="text-center">
+                <h2 class="text-3xl md:text-4xl font-bold text-gray-800 font-serif">Welcome Back</h2>
+                <p class="text-gray-600 mt-2">Sign in to get your food.</p>
+            </div>
+            <div>
+                <label for="email" class="block text-sm font-medium text-gray-700">Email</label>
+                <input type="email" id="email" class="input-field mt-1 block w-full rounded-lg py-3 px-4" required>
+            </div>
+            <div>
+                <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
+                <input type="password" id="password" class="input-field mt-1 block w-full rounded-lg py-3 px-4" required>
+            </div>
+            <button type="submit" class="btn btn-primary w-full text-white font-bold py-3 rounded-lg">Login</button>
+            <div id="login-error" class="text-red-500 text-center text-sm h-4"></div>
+            <p class="text-center text-sm">
+                <span>Don't have an account?</span>
+                <a href="#" id="show-signup-link" class="font-semibold text-gray-800 hover:underline">Sign Up</a>
+            </p>
+        </form>
+    </template>
+    <template id="signup-form-template">
+        <form id="signup-form" class="space-y-4 fade-in">
+            <div class="text-center">
+                <h2 class="text-3xl md:text-4xl font-bold text-gray-800 font-serif">Create Account</h2>
+                <p class="text-gray-600 mt-2">Join us for a delicious journey.</p>
+            </div>
+            <input type="text" id="signup-name" class="input-field w-full rounded-lg py-3 px-4" placeholder="Full Name" required>
+            <input type="tel" id="signup-mobile" class="input-field w-full rounded-lg py-3 px-4" placeholder="Mobile Number" required>
+            <input type="email" id="signup-email" class="input-field w-full rounded-lg py-3 px-4" placeholder="Email Address" required>
+            <input type="password" id="signup-password" class="input-field w-full rounded-lg py-3 px-4" placeholder="Password (min. 6 characters)" required>
+            <button type="submit" class="btn btn-primary w-full text-white font-bold py-3 rounded-lg">Sign Up</button>
+            <div id="signup-error" class="text-red-500 text-center text-sm h-4"></div>
+            <p class="text-center text-sm">
+                <span>Already have an account?</span>
+                <a href="#" id="show-login-link" class="font-semibold text-gray-800 hover:underline">Login</a>
+            </p>
+        </form>
+    </template>
+
+    <template id="customer-portal-template">
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-8">
+            <aside class="hidden lg:block lg:col-span-1 bg-white p-4 rounded-xl shadow-md self-start sticky top-28">
+                <h3 class="text-xl font-bold font-serif mb-6 px-4">Menu</h3>
+                <nav id="customer-nav" class="space-y-1">
+                    <button class="w-full text-left sidebar-link active" data-view="home"><i data-feather="home"></i><span>Home</span></button>
+                    <button class="w-full text-left sidebar-link" data-view="orders"><i data-feather="package"></i><span>My Orders</span></button>
+                    <button class="w-full text-left sidebar-link" data-view="profile"><i data-feather="user"></i><span>Profile</span></button>
+                </nav>
+            </aside>
+            <main id="customer-main-content" class="lg:col-span-3">
+            </main>
+        </div>
+    </template>
+
+    <div id="modal-container" class="modal-overlay"></div>
+
+    <div id="toast-container" class="fixed bottom-5 left-1/2 -translate-x-1/2 sm:left-auto sm:translate-x-0 sm:right-5 z-[9999] flex flex-col items-center sm:items-end space-y-2 w-[90%] sm:w-auto max-w-sm"></div>
+
+</body>
+</html>
