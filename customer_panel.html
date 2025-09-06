@@ -28,8 +28,11 @@
             --text-color: #1f2937;       /* New */
             --header-bg: #ffffff;        /* New */
             --button-text-color: #ffffff;/* New */
-            --secondary-glow: rgba(234, 193, 77, 0.8);
+            --secondary-glow: rgba(212, 175, 55, 0.7);
             --secondary-glow-soft: rgba(234, 193, 77, 0.5);
+        }
+        html {
+            scroll-behavior: smooth;
         }
         html, body { height: 100%; }
         body { 
@@ -355,6 +358,57 @@
             from { transform: translateX(0); }
             to { transform: translateX(-80px); }
         }
+
+        /* ADD THESE NEW, FINAL RULES */
+.category-section {
+    /* This ensures the section title isn't hidden behind the sticky bar on jump */
+    scroll-margin-top: 160px; 
+}
+
+#category-quick-links-wrapper.is-fixed {
+    position: fixed;
+    top: 80px; /* Sits below the main header */
+    background-color: rgba(255, 255, 255, 0.9);
+    backdrop-filter: blur(8px);
+    box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+    border-radius: 0.5rem;
+    padding-top: 0.75rem;
+    padding-bottom: 0.75rem;
+}
+
+.quick-link-btn {
+    padding: 0.5rem 1rem;
+    border-radius: 9999px; /* pill shape */
+    background-color: #ffffff;
+    color: #4A5568;
+    font-weight: 600;
+    text-decoration: none;
+    transition: all 0.2s ease;
+    border: 1px solid #e2e8f0;
+    white-space: nowrap;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+.quick-link-btn:hover {
+    background-color: var(--primary-color);
+    color: var(--button-text-color);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+}
+
+@keyframes neon-glow-secondary {
+  from {
+    box-shadow: 0 0 2px #fff, 0 0 4px #fff, 0 0 6px var(--secondary-glow);
+  }
+  to {
+    box-shadow: 0 0 4px #fff, 0 0 7px var(--secondary-glow), 0 0 10px var(--secondary-glow);
+  }
+}
+
+.neon-border-secondary {
+    border: 1px solid rgba(212, 175, 55, 0.8);
+    animation: neon-glow-secondary 1.5s infinite alternate;
+}
+
     </style>
      <script src="customer_panel.js" defer></script>
 </head>
