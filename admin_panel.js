@@ -902,7 +902,33 @@ async function renderAdminMenuManagementView(restaurantId) {
            listEl.innerHTML = '<p class="text-center bg-white p-6 rounded-lg shadow-md">This menu is empty.</p>';
            return;
         }
-        listEl.innerHTML = snapshot.docs.map(doc => renderMenuItemCard(doc, restaurantId)).join('');
+
+        // --- NEW: Logic to group items by category ---
+        const groupedItems = {};
+        snapshot.docs.forEach(doc => {
+            const itemData = doc.data();
+            const category = itemData.category || 'Uncategorized';
+            if (!groupedItems[category]) {
+                groupedItems[category] = [];
+            }
+            groupedItems[category].push(doc);
+        });
+
+        const sortedCategories = Object.keys(groupedItems).sort();
+
+        let finalHtml = '';
+        sortedCategories.forEach(categoryName => {
+            finalHtml += `
+                <div class="pt-4">
+                    <h3 class="text-xl font-semibold font-serif mb-3 border-b pb-2">${categoryName}</h3>
+                    <div class="space-y-3">
+                        ${groupedItems[categoryName].map(doc => renderMenuItemCard(doc, restaurantId)).join('')}
+                    </div>
+                </div>
+            `;
+        });
+        
+        listEl.innerHTML = finalHtml;
         feather.replace();
     });
     unsubscribeListeners.push(unsub);
@@ -935,10 +961,10 @@ function renderMenuItemCard(doc, restaurantId) {
     `;
 }
 
-
+// MODIFIED: This function is now async and completely rewritten for a dynamic dropdown.
 async function showMenuItemForm(restaurantId, itemId = null) {
     const isEditing = itemId !== null;
-    let item = { name: '', description: '', imageUrl: '', variants: [{ name: '', price: '' }] };
+    let item = { name: '', description: '', imageUrl: '', category: '', variants: [{ name: '', price: '' }] };
     if (isEditing) {
         const itemDoc = await db.collection('restaurants').doc(restaurantId).collection('menu').doc(itemId).get();
         if (itemDoc.exists) {
@@ -947,12 +973,34 @@ async function showMenuItemForm(restaurantId, itemId = null) {
         }
     }
 
+    // --- NEW: Fetch categories from the master collection ---
+    const categoriesSnapshot = await db.collection('menuCategories').orderBy('name').get();
+    const categoryOptions = categoriesSnapshot.docs.map(doc => {
+        const categoryName = doc.data().name;
+        const isSelected = item.category === categoryName ? 'selected' : '';
+        return `<option value="${categoryName}" ${isSelected}>${categoryName}</option>`;
+    }).join('');
+
     const formHtml = `
         <form id="menu-item-form" class="space-y-4">
             <h3 class="text-2xl font-bold font-serif mb-4">${isEditing ? 'Edit Menu Item' : 'Add New Menu Item'}</h3>
             <input type="hidden" name="restaurantId" value="${restaurantId}">
             <input type="hidden" name="itemId" value="${itemId || ''}">
             <input type="text" name="name" class="input-field w-full" placeholder="Item Name (e.g., Biryani)" value="${item.name}" required>
+            
+            <div>
+                <label class="block text-sm font-medium">Category</label>
+                <select name="category" class="input-field w-full" required>
+                    <option value="">-- Select a Category --</option>
+                    ${categoryOptions}
+                    <option value="add_new" class="font-bold text-blue-600">-- Add New Category --</option>
+                </select>
+            </div>
+            <div id="new-category-container" class="hidden pl-4 border-l-2 border-blue-500">
+                <label class="block text-sm font-medium">New Category Name</label>
+                <input type="text" name="newCategoryName" class="input-field w-full" placeholder="e.g., Desserts">
+            </div>
+
             <textarea name="description" class="input-field w-full" rows="2" placeholder="Description">${item.description || ''}</textarea>
             <div>
                 <label class="block text-sm font-medium">Image URL</label>
@@ -980,6 +1028,21 @@ async function showMenuItemForm(restaurantId, itemId = null) {
     `;
     showModal(formHtml);
 
+    // --- NEW: Event listener to handle the "Add New" selection ---
+    const categorySelect = document.querySelector('#menu-item-form select[name="category"]');
+    const newCategoryContainer = document.getElementById('new-category-container');
+    const newCategoryInput = document.querySelector('#menu-item-form input[name="newCategoryName"]');
+
+    categorySelect.addEventListener('change', (e) => {
+        if (e.target.value === 'add_new') {
+            newCategoryContainer.classList.remove('hidden');
+            newCategoryInput.required = true;
+        } else {
+            newCategoryContainer.classList.add('hidden');
+            newCategoryInput.required = false;
+        }
+    });
+
     document.getElementById('menu-item-form').elements.imageUrl.addEventListener('input', (e) => {
         document.getElementById('menu-image-preview').src = e.target.value || 'https://placehold.co/100x100?text=Preview';
     });
@@ -988,11 +1051,7 @@ async function showMenuItemForm(restaurantId, itemId = null) {
     document.getElementById('add-variant-btn').addEventListener('click', () => {
         const row = document.createElement('div');
         row.className = 'variant-row flex items-center gap-2';
-        row.innerHTML = `
-            <input type="text" class="input-field flex-grow" placeholder="Variant Name (e.g., Full) - Optional">
-            <input type="number" class="input-field w-28" placeholder="Price" step="0.01" required>
-            <button type="button" class="btn btn-danger p-2 remove-variant-btn">&times;</button>
-        `;
+        row.innerHTML = `<input type="text" class="input-field flex-grow" placeholder="Variant Name (e.g., Full) - Optional"><input type="number" class="input-field w-28" placeholder="Price" step="0.01" required><button type="button" class="btn btn-danger p-2 remove-variant-btn">&times;</button>`;
         variantsContainer.appendChild(row);
     });
     variantsContainer.addEventListener('click', e => {
@@ -1001,39 +1060,63 @@ async function showMenuItemForm(restaurantId, itemId = null) {
         }
     });
 
-    document.getElementById('menu-item-form').addEventListener('submit', async e => {
-        e.preventDefault();
-        const form = e.target;
-        
-        const variants = [];
-        form.querySelectorAll('.variant-row').forEach(row => {
-            variants.push({
-                name: row.children[0].value,
-                price: parseFloat(row.children[1].value)
-            });
-        });
-
-        const data = {
-            name: form.elements.name.value,
-            description: form.elements.description.value,
-            imageUrl: form.elements.imageUrl.value,
-            variants: variants,
-            price: variants[0] ? variants[0].price : 0,
-        };
-
-        const restId = form.elements.restaurantId.value;
-        const itmId = form.elements.itemId.value;
-
-        if (itmId) {
-            await db.collection('restaurants').doc(restId).collection('menu').doc(itmId).update(data);
-            showToast("Menu item updated!");
-        } else {
-            await db.collection('restaurants').doc(restId).collection('menu').add(data);
-            showToast("New menu item added!");
-        }
-        closeModal();
-    });
+    // MODIFIED: We now call a named function to handle the complex save logic.
+    document.getElementById('menu-item-form').addEventListener('submit', handleSaveMenuItem);
 }
+
+
+// NEW: This function handles the logic for saving a menu item, including adding new categories.
+async function handleSaveMenuItem(e) {
+    e.preventDefault();
+    const form = e.target;
+    const restaurantId = form.elements.restaurantId.value;
+    const itemId = form.elements.itemId.value;
+
+    const selectedCategoryValue = form.elements.category.value;
+    let finalCategoryName = '';
+
+    // Check if the user is adding a new category
+    if (selectedCategoryValue === 'add_new') {
+        const newCategoryName = form.elements.newCategoryName.value.trim();
+        if (!newCategoryName) {
+            showToast("New category name cannot be empty.", "error");
+            return;
+        }
+        // Save the new category to the master collection
+        await db.collection('menuCategories').add({ name: newCategoryName });
+        finalCategoryName = newCategoryName;
+        showToast(`New category "${newCategoryName}" created!`, 'success');
+    } else {
+        finalCategoryName = selectedCategoryValue;
+    }
+    
+    const variants = [];
+    form.querySelectorAll('.variant-row').forEach(row => {
+        variants.push({
+            name: row.children[0].value,
+            price: parseFloat(row.children[1].value)
+        });
+    });
+
+    const data = {
+        name: form.elements.name.value,
+        category: finalCategoryName, // Use the final determined category name
+        description: form.elements.description.value,
+        imageUrl: form.elements.imageUrl.value,
+        variants: variants,
+        price: variants[0] ? variants[0].price : 0,
+    };
+
+    if (itemId) { // Editing an existing item
+        await db.collection('restaurants').doc(restaurantId).collection('menu').doc(itemId).update(data);
+        showToast("Menu item updated!");
+    } else { // Adding a new item
+        await db.collection('restaurants').doc(restaurantId).collection('menu').add(data);
+        showToast("New menu item added!");
+    }
+    closeModal();
+}
+
 
 function handleDeleteMenuItem(restaurantId, itemId) {
     showConfirmationModal("Delete Item?", "Are you sure you want to permanently delete this menu item? This cannot be undone.",
