@@ -12,6 +12,7 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
+const googleProvider = new firebase.auth.GoogleAuthProvider(); // <-- NEW: Google Provider
 
 // --- GLOBAL STATE ---
 let siteSettings = {};
@@ -36,7 +37,7 @@ async function initializeLogin() {
         } else {
             // If no user, render the login form
             renderAuthForm('login');
-            applySiteSettings();
+            // applySiteSettings(); // This is called inside renderAuthForm now
         }
     });
 }
@@ -52,29 +53,27 @@ function renderAuthForm(formType) {
     if (formType === 'login') {
         document.getElementById('login-form').addEventListener('submit', handleLogin);
         document.getElementById('show-signup-link').addEventListener('click', (e) => { e.preventDefault(); renderAuthForm('signup'); });
-       // --- FINAL PASSWORD TOGGLE LOGIC ---
+        document.getElementById('google-login-btn').addEventListener('click', handleGoogleLogin); // <-- NEW
+
+        // --- PASSWORD TOGGLE LOGIC ---
         const passwordInput = document.getElementById('password');
         const toggleButton = document.getElementById('toggle-password-visibility');
         const eyeIcon = toggleButton.querySelector('.eye-icon');
         const eyeOffIcon = toggleButton.querySelector('.eye-off-icon');
 
         toggleButton.addEventListener('click', () => {
-            // Check the current type of the input
             const isPassword = passwordInput.type === 'password';
-            
-            // Set the new type
             passwordInput.type = isPassword ? 'text' : 'password';
-            
-            // Toggle the 'hidden' class on both icons
             eyeIcon.classList.toggle('hidden');
             eyeOffIcon.classList.toggle('hidden');
         });
-        // --- END OF LOGIC ---
-
-    } else {
+        
+    } else { // Signup form
         document.getElementById('signup-form').addEventListener('submit', handleSignup);
         document.getElementById('show-login-link').addEventListener('click', (e) => { e.preventDefault(); renderAuthForm('login'); });
-        // --- NEW SIGNUP PASSWORD TOGGLE LOGIC ---
+        document.getElementById('google-signup-btn').addEventListener('click', handleGoogleLogin); // <-- NEW
+
+        // --- SIGNUP PASSWORD TOGGLE LOGIC ---
         const signupPasswordInput = document.getElementById('signup-password');
         const signupToggleButton = document.getElementById('toggle-signup-password-visibility');
         const signupEyeIcon = signupToggleButton.querySelector('.eye-icon');
@@ -86,11 +85,13 @@ function renderAuthForm(formType) {
             signupEyeIcon.classList.toggle('hidden');
             signupEyeOffIcon.classList.toggle('hidden');
         });
-        // --- END OF NEW LOGIC ---
     }
     // Apply settings after form is rendered
-    
-}function applySiteSettings() {
+    applySiteSettings();
+}
+
+// NOTE: I removed the duplicate applySiteSettings function and fixed the call in initializeLogin
+function applySiteSettings() {
     // Safely access the nested theme object
     const theme = siteSettings.theme || {};
     const globalTheme = theme.global || {};
@@ -111,7 +112,6 @@ function renderAuthForm(formType) {
         if (logoElSignup) logoElSignup.src = siteSettings.logoUrl;
     }
 
-    // Read colors from the correct nested globalTheme object
     document.documentElement.style.setProperty('--primary-color', globalTheme.primaryColor || '#1a202c');
     document.documentElement.style.setProperty('--secondary-color', globalTheme.secondaryColor || '#D4AF37');
     
@@ -135,7 +135,7 @@ async function handleLogin(e) {
     try {
         await auth.setPersistence(persistence);
         await auth.signInWithEmailAndPassword(email, password);
-        // The onAuthStateChanged listener will handle the redirect
+        // onAuthStateChanged will handle the redirect
     } catch (err) {
         if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
             errorEl.textContent = 'Invalid username or password. Please try again.';
@@ -146,6 +146,41 @@ async function handleLogin(e) {
     }
 }
 
+// --- NEW: GOOGLE LOGIN HANDLER ---
+async function handleGoogleLogin() {
+    const errorEl = document.getElementById('login-error') || document.getElementById('signup-error');
+    errorEl.textContent = '';
+    
+    try {
+        const result = await auth.signInWithPopup(googleProvider);
+        const user = result.user;
+
+        // Check if user already exists in Firestore
+        const userDocRef = db.collection('users').doc(user.uid);
+        const userDoc = await userDocRef.get();
+
+        // If user is new, create their profile in Firestore
+        if (!userDoc.exists) {
+            const newUser = {
+                name: user.displayName,
+                email: user.email,
+                role: 'customer', // Default role for new signups
+                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+            };
+            // If Google provides a photo, add it
+            if (user.photoURL) {
+                newUser.photoURL = user.photoURL;
+            }
+            await userDocRef.set(newUser);
+        }
+        // onAuthStateChanged will handle redirecting both new and existing users
+    } catch (error) {
+        console.error("Google Sign-In Error:", error);
+        if (error.code !== 'auth/popup-closed-by-user') {
+            errorEl.textContent = "An error occurred during Google sign-in. Please try again.";
+        }
+    }
+}
 
 function handleSignup(e) {
     e.preventDefault();
@@ -155,12 +190,11 @@ function handleSignup(e) {
         name: document.getElementById('signup-name').value,
         mobile: document.getElementById('signup-mobile').value,
         email: document.getElementById('signup-email').value,
-        role: 'customer', // Default role for new signups
+        role: 'customer',
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
     };
     const password = document.getElementById('signup-password').value;
 
-    // Basic validation
     if (!userData.name || !userData.email || password.length < 6) {
         errorEl.textContent = "Please fill all fields. Password must be at least 6 characters.";
         return;
@@ -168,7 +202,6 @@ function handleSignup(e) {
 
     auth.createUserWithEmailAndPassword(userData.email, password)
         .then(cred => {
-            // After creating the user in Auth, save their details in Firestore
             return db.collection('users').doc(cred.user.uid).set(userData);
         })
         .catch(err => {
@@ -180,60 +213,27 @@ async function redirectUser(userId) {
     const userDoc = await db.collection('users').doc(userId).get();
     if (userDoc.exists) {
         const userRole = userDoc.data().role;
-        // Redirect based on role
         switch (userRole) {
             case 'superadmin':
                 window.location.href = 'superadmin_panel.html';
                 break;
             case 'admin':
-                // Assuming you have an admin.html
                 window.location.href = 'admin_panel.html';
                 break;
             case 'restaurant':
-                 // Assuming you have a restaurant.html
                 window.location.href = 'restaurant_panel.html';
                 break;
             case 'delivery':
-                 // Assuming you have a delivery.html
                 window.location.href = 'delivery_panel.html';
                 break;
             case 'customer':
             default:
-                 // Assuming you have a customer.html
                 window.location.href = 'customer_Panel.html';
                 break;
         }
     } else {
-        // Handle case where user exists in Auth but not in Firestore
         console.error("User data not found in Firestore. Logging out.");
         auth.signOut();
-    }
-}
-
-function applySiteSettings() {
-    const logoEl = document.getElementById('website-logo-header');
-    const nameEl = document.getElementById('website-name-header');
-    const logoElSignup = document.getElementById('website-logo-header-signup');
-    const nameElSignup = document.getElementById('website-name-header-signup');
-    const authContainerBg = document.getElementById('auth-container');
-
-    if (siteSettings.websiteName) {
-        if (nameEl) nameEl.textContent = siteSettings.websiteName;
-        if (nameElSignup) nameElSignup.textContent = siteSettings.websiteName;
-        document.title = siteSettings.websiteName + " - Login";
-    }
-    if (siteSettings.logoUrl) {
-        if (logoEl) logoEl.src = siteSettings.logoUrl;
-        if (logoElSignup) logoElSignup.src = siteSettings.logoUrl;
-    }
-    if (siteSettings.primaryColor) {
-        document.documentElement.style.setProperty('--primary-color', siteSettings.primaryColor);
-    }
-    if (siteSettings.secondaryColor) {
-        document.documentElement.style.setProperty('--secondary-color', siteSettings.secondaryColor);
-    }
-    if (siteSettings.heroBgImage) {
-        authContainerBg.style.backgroundImage = `url('${siteSettings.heroBgImage}')`;
     }
 }
 
