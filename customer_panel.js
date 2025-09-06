@@ -694,6 +694,48 @@ function searchRestaurantsAndFood(searchTerm) {
     });
 }
 
+// NEW: This function will control the sticky behavior of the category bar
+function initializeStickyCategoryBar() {
+    const barWrapper = document.getElementById('category-quick-links-wrapper');
+    const mainContentArea = document.getElementById('customer-main-content');
+    if (!barWrapper) return;
+
+    // Create a placeholder to prevent content from jumping when the bar becomes fixed
+    const placeholder = document.createElement('div');
+    placeholder.style.height = `${barWrapper.offsetHeight}px`;
+    barWrapper.parentNode.insertBefore(placeholder, barWrapper);
+
+    const onScroll = () => {
+        if (!document.getElementById('category-quick-links-wrapper')) {
+             window.removeEventListener('scroll', onScroll);
+             return;
+        }
+
+        const stickyPoint = placeholder.getBoundingClientRect().top;
+        const mainContentRect = mainContentArea.getBoundingClientRect();
+
+        if (stickyPoint <= 80) { // 80px should be the height of your main header
+            if (!barWrapper.classList.contains('is-fixed')) {
+                // Set width and left position just before making it fixed
+                barWrapper.style.width = `${mainContentRect.width}px`;
+                barWrapper.style.left = `${mainContentRect.left}px`;
+                barWrapper.classList.add('is-fixed');
+            }
+        } else {
+            if (barWrapper.classList.contains('is-fixed')) {
+                barWrapper.classList.remove('is-fixed');
+                // Clear inline styles so it returns to normal
+                barWrapper.style.width = '';
+                barWrapper.style.left = '';
+            }
+        }
+    };
+
+    window.addEventListener('scroll', onScroll);
+    // Add a way to clean up this listener when we navigate away
+    unsubscribeListeners.push(() => window.removeEventListener('scroll', onScroll));
+}
+
 
 async function renderCustomerRestaurantView(restaurantId) {
     const contentArea = document.getElementById('customer-main-content');
@@ -719,78 +761,125 @@ async function renderCustomerRestaurantView(restaurantId) {
             </span>`;
     }
 
-    let menuHtml = 'No menu items found.';
+    let menuHtml = '<p class="text-center bg-white p-6 rounded-lg shadow-md">No menu items found for this restaurant.</p>';
+    let quickLinksHtml = '';
+
     if (!menuSnapshot.empty) {
-        menuHtml = menuSnapshot.docs.map(doc => {
+        
+        const groupedMenu = {};
+        menuSnapshot.docs.forEach(doc => {
             const item = doc.data();
-            const isAvailable = item.isAvailable !== false;
-            const itemImage = item.imageUrl || 'https://placehold.co/400x300?text=Food';
-            const variants = item.variants && item.variants.length > 0 ? item.variants : [{ name: '', price: item.price }];
-
-            let mobilePricingHtml;
-            if (variants.length > 1) {
-                mobilePricingHtml = `<div class="mt-2 text-sm text-center text-gray-700">Multiple options</div>`;
-            } else {
-                mobilePricingHtml = `
-                    <div class="flex items-center justify-between mt-3">
-                         <p class="font-bold text-lg text-gray-800">₹${variants[0].price}</p>
-                         <button 
-                            data-action="add-to-cart" data-item-id="${doc.id}" data-item-name="${item.name}" data-item-price="${variants[0].price}" data-restaurant-id="${restaurantId}" data-restaurant-name="${restaurant.name}" 
-                            class="btn btn-secondary py-2 px-3 rounded-lg font-semibold flex items-center justify-center gap-2" 
-                            ${!isAvailable ? 'disabled' : ''}>
-                            <i data-feather="plus" class="w-5 h-5"></i>
-                        </button>
-                    </div>`;
+            const category = item.category || 'Miscellaneous'; 
+            if (!groupedMenu[category]) {
+                groupedMenu[category] = [];
             }
-            const mobileCard = `
-                <div class="block md:hidden bg-white rounded-xl shadow-md overflow-hidden transition-shadow hover:shadow-lg flex flex-col cursor-pointer ${!isAvailable ? 'opacity-60 bg-gray-50 cursor-not-allowed' : ''}"
-                    data-action="view-item-details" data-item-id="${doc.id}" data-restaurant-id="${restaurantId}">
-                    <img src="${itemImage}" class="w-full h-32 object-cover">
-                    <div class="p-3 flex flex-col flex-grow">
-                        <p class="font-bold font-serif flex-grow">${item.name}</p>
-                        ${mobilePricingHtml}
-                    </div>
-                </div>`;
+            groupedMenu[category].push(doc);
+        });
 
-            let desktopPricingHtml;
-            const desktopButtonClasses = "btn btn-secondary py-2 px-4 rounded-lg font-semibold flex items-center justify-center gap-2 w-full md:w-auto md:py-3 md:px-6";
-            if (variants.length > 1) {
-                desktopPricingHtml = variants.map(v => {
-                    const variantDisplayName = v.name ? ` (${v.name})` : '';
-                    const cartItemName = `${item.name}${variantDisplayName}`;
-                    return `
-                    <div class="flex justify-between items-center py-2 border-t mt-2">
-                        <div><p class="font-semibold">${v.name || item.name}</p><p class="font-bold text-lg">₹${v.price}</p></div>
-                        <button data-action="add-to-cart" data-item-id="${doc.id}-${v.name}" data-item-name="${cartItemName}" data-item-price="${v.price}" data-restaurant-id="${restaurantId}" data-restaurant-name="${restaurant.name}" class="${desktopButtonClasses}" ${!isAvailable ? 'disabled' : ''}>
-                            <i data-feather="plus" class="w-5 h-5 hidden md:inline-block"></i><span>Add to Cart</span></button>
-                    </div>`;
-                }).join('');
-            } else {
-                desktopPricingHtml = `
-                    <div class="flex items-center justify-between mt-2">
-                         <p class="font-bold text-xl text-gray-800">₹${variants[0].price}</p>
-                         <button data-action="add-to-cart" data-item-id="${doc.id}" data-item-name="${item.name}" data-item-price="${variants[0].price}" data-restaurant-id="${restaurantId}" data-restaurant-name="${restaurant.name}" class="${desktopButtonClasses}" ${!isAvailable ? 'disabled' : ''}>
-                            <i data-feather="plus" class="w-5 h-5 hidden md:inline-block"></i><span>Add to Cart</span></button>
-                    </div>`;
-            }
-            const desktopCard = `
-                <div class="hidden md:flex bg-white rounded-xl shadow-md overflow-hidden transition-shadow hover:shadow-lg items-center gap-4 p-4 cursor-pointer ${!isAvailable ? 'opacity-60 bg-gray-50 cursor-not-allowed' : ''}"
-                    data-action="view-item-details" data-item-id="${doc.id}" data-restaurant-id="${restaurantId}">
-                    <img src="${itemImage}" class="w-24 h-24 object-cover rounded-lg flex-shrink-0">
-                    <div class="flex-grow text-left w-full">
-                        <p class="font-bold text-lg font-serif">${item.name}</p>
-                        <p class="text-sm text-gray-500 mt-1 mb-2">${item.description || ''}</p>
-                        <div>${desktopPricingHtml}</div>
-                    </div>
-                </div>`;
+        const preferredCategoryOrder = ["Starter", "Snacks", "Main Course", "Desserts", "Coldrink"];
+        const sortedCategories = Object.keys(groupedMenu).sort((a, b) => {
+            const indexA = preferredCategoryOrder.indexOf(a);
+            const indexB = preferredCategoryOrder.indexOf(b);
+            if (indexA > -1 && indexB > -1) return indexA - indexB;
+            if (indexA > -1) return -1;
+            if (indexB > -1) return 1;
+            return a.localeCompare(b);
+        });
 
-            return mobileCard + desktopCard;
+        quickLinksHtml = sortedCategories.map(category => {
+            const categoryId = category.replace(/\s+/g, '-').toLowerCase();
+            return `<a href="#menu-section-${categoryId}" class="quick-link-btn neon-border-secondary">${category}</a>`;
+        }).join('');
+
+        menuHtml = sortedCategories.map(category => {
+            const categoryId = category.replace(/\s+/g, '-').toLowerCase();
+            const itemsHtml = groupedMenu[category].map(doc => {
+                const item = doc.data();
+                const isAvailable = item.isAvailable !== false;
+                const itemImage = item.imageUrl || 'https://placehold.co/400x300?text=Food';
+                const variants = item.variants && item.variants.length > 0 ? item.variants : [{ name: '', price: item.price }];
+
+                let mobilePricingHtml;
+                if (variants.length > 1) {
+                    mobilePricingHtml = `<div class="mt-2 text-sm text-center text-gray-700">Multiple options</div>`;
+                } else {
+                    mobilePricingHtml = `
+                        <div class="flex items-center justify-between mt-3">
+                            <p class="font-bold text-lg text-gray-800">₹${variants[0].price}</p>
+                            <button 
+                                data-action="add-to-cart" data-item-id="${doc.id}" data-item-name="${item.name}" data-item-price="${variants[0].price}" data-restaurant-id="${restaurantId}" data-restaurant-name="${restaurant.name}" 
+                                class="btn btn-secondary py-2 px-3 rounded-lg font-semibold flex items-center justify-center gap-2" 
+                                ${!isAvailable ? 'disabled' : ''}>
+                                <i data-feather="plus" class="w-5 h-5"></i>
+                            </button>
+                        </div>`;
+                }
+                const mobileCard = `
+                    <div class="block md:hidden bg-white rounded-xl shadow-md overflow-hidden transition-shadow hover:shadow-lg flex flex-col cursor-pointer ${!isAvailable ? 'opacity-60 bg-gray-50 cursor-not-allowed' : ''}"
+                        data-action="view-item-details" data-item-id="${doc.id}" data-restaurant-id="${restaurantId}">
+                        <img src="${itemImage}" class="w-full h-32 object-cover">
+                        <div class="p-3 flex flex-col flex-grow">
+                            <p class="font-bold font-serif flex-grow">${item.name}</p>
+                            ${mobilePricingHtml}
+                        </div>
+                    </div>`;
+
+                let desktopPricingHtml;
+                const desktopButtonClasses = "btn btn-secondary py-2 px-4 rounded-lg font-semibold flex items-center justify-center gap-2 w-full md:w-auto md:py-3 md:px-6";
+                if (variants.length > 1) {
+                    desktopPricingHtml = variants.map(v => {
+                        const variantDisplayName = v.name ? ` (${v.name})` : '';
+                        const cartItemName = `${item.name}${variantDisplayName}`;
+                        return `
+                        <div class="flex justify-between items-center py-2 border-t mt-2">
+                            <div><p class="font-semibold">${v.name || item.name}</p><p class="font-bold text-lg">₹${v.price}</p></div>
+                            <button data-action="add-to-cart" data-item-id="${doc.id}-${v.name}" data-item-name="${cartItemName}" data-item-price="${v.price}" data-restaurant-id="${restaurantId}" data-restaurant-name="${restaurant.name}" class="${desktopButtonClasses}" ${!isAvailable ? 'disabled' : ''}>
+                                <i data-feather="plus" class="w-5 h-5 hidden md:inline-block"></i><span>Add to Cart</span></button>
+                        </div>`;
+                    }).join('');
+                } else {
+                    desktopPricingHtml = `
+                        <div class="flex items-center justify-between mt-2">
+                            <p class="font-bold text-xl text-gray-800">₹${variants[0].price}</p>
+                            <button data-action="add-to-cart" data-item-id="${doc.id}" data-item-name="${item.name}" data-item-price="${variants[0].price}" data-restaurant-id="${restaurantId}" data-restaurant-name="${restaurant.name}" class="${desktopButtonClasses}" ${!isAvailable ? 'disabled' : ''}>
+                                <i data-feather="plus" class="w-5 h-5 hidden md:inline-block"></i><span>Add to Cart</span></button>
+                        </div>`;
+                }
+                const desktopCard = `
+                    <div class="hidden md:flex bg-white rounded-xl shadow-md overflow-hidden transition-shadow hover:shadow-lg items-center gap-4 p-4 cursor-pointer ${!isAvailable ? 'opacity-60 bg-gray-50 cursor-not-allowed' : ''}"
+                        data-action="view-item-details" data-item-id="${doc.id}" data-restaurant-id="${restaurantId}">
+                        <img src="${itemImage}" class="w-24 h-24 object-cover rounded-lg flex-shrink-0">
+                        <div class="flex-grow text-left w-full">
+                            <p class="font-bold text-lg font-serif">${item.name}</p>
+                            <p class="text-sm text-gray-500 mt-1 mb-2">${item.description || ''}</p>
+                            <div>${desktopPricingHtml}</div>
+                        </div>
+                    </div>`;
+
+                return mobileCard + desktopCard;
+            }).join('');
+
+            return `
+                <div id="menu-section-${categoryId}" class="category-section">
+                    <h3 class="text-2xl font-bold font-serif mb-4 pt-4">${category}</h3>
+                    <div class="grid grid-cols-2 md:grid-cols-1 gap-4">
+                        ${itemsHtml}
+                    </div>
+                </div>
+            `;
         }).join('');
     }
-
+    
     contentArea.innerHTML = `
         <div>
             <button data-action="back-to-home" class="btn bg-white mb-4 flex items-center gap-2"><i data-feather="arrow-left"></i><span>Back to Restaurants</span></button>
+            
+            <div id="category-quick-links-wrapper">
+                 <div class="flex overflow-x-auto gap-3">
+                    ${quickLinksHtml}
+                </div>
+            </div>
+
             <div class="bg-white rounded-xl shadow-md p-6">
                 <div class="flex items-center">
                     <h2 class="text-3xl md:text-4xl font-bold font-serif">${restaurant.name}</h2>
@@ -798,14 +887,39 @@ async function renderCustomerRestaurantView(restaurantId) {
                 </div>
                 <p class="text-gray-600 mt-1">${restaurant.cuisine}</p>
                 <p class="text-gray-500 mt-2 flex items-center"><i data-feather="map-pin" class="w-4 h-4 mr-2 flex-shrink-0"></i><span>${restaurant.address || ''}</span></p>
-                <div class="mt-6">
-                    <h3 class="text-2xl font-bold font-serif mb-4">Menu</h3>
-                    <div class="grid grid-cols-2 md:grid-cols-1 gap-4">${menuHtml}</div>
+                
+                <div id="menu-container" class="mt-6 border-t pt-2">
+                     ${menuHtml}
                 </div>
             </div>
         </div>`;
+        
     feather.replace();
+
+    if (quickLinksHtml) {
+        initializeStickyCategoryBar();
+    }
+
+    const quickLinksContainer = document.getElementById('category-quick-links-wrapper');
+    if(quickLinksContainer) {
+        quickLinksContainer.addEventListener('click', (e) => {
+            const link = e.target.closest('a.quick-link-btn');
+            if (!link) return;
+            
+            e.preventDefault();
+            const targetId = link.getAttribute('href');
+            const targetElement = document.querySelector(targetId);
+
+            if(targetElement) {
+                targetElement.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'start'
+                });
+            }
+        });
+    }
 }
+
 
 async function renderMenuItemDetailView(itemId, restaurantId) {
     const restaurantDoc = await db.collection('restaurants').doc(restaurantId).get();
@@ -1145,7 +1259,6 @@ async function renderCartView() {
     
     document.querySelector('input[name="deliveryType"]:checked').dispatchEvent(new Event('change', { 'bubbles': true }));
     
-    // --- NEW: Event listener for animated button ---
     const animatedOrderBtn = document.querySelector('.animated-order-btn');
     if (animatedOrderBtn) {
         animatedOrderBtn.addEventListener('click', () => {
@@ -1154,7 +1267,6 @@ async function renderCartView() {
 
             if (animatedOrderBtn.classList.contains('animating')) return;
             
-            // Perform validation before starting animation
             const deliveryType = form.elements.deliveryType.value;
             const deliveryAddress = form.elements.deliveryAddress.value;
             if (deliveryType === 'delivery' && !deliveryAddress.trim()) {
@@ -1206,7 +1318,6 @@ async function handlePlaceOrder(form) {
         console.error("Error placing order: ", error);
         showSimpleModal('Order Error', 'There was an error placing your order. Please try again.');
         
-        // --- NEW: Reset button on failure ---
         const animatedOrderBtn = document.querySelector('.animated-order-btn');
         if (animatedOrderBtn) {
             animatedOrderBtn.classList.remove('animating');
@@ -1225,7 +1336,6 @@ function handleCancelOrder(orderId) {
                 await db.collection('orders').doc(orderId).update({ status: 'cancelled' });
                 await logAudit("Order Cancelled", `Order ID: ${orderId}`);
                 showToast("Order cancelled successfully.", "success");
-                // The view will update automatically due to the live listener.
             } catch (error) {
                 console.error("Error cancelling order:", error);
                 showSimpleModal("Error", "Could not cancel the order. Please try again.");
@@ -1258,8 +1368,8 @@ function showToast(message, type = 'success') {
         toast.classList.add('toast-exit');
         setTimeout(() => {
             toast.remove();
-        }, 500); // Match animation duration
-    }, 3000); // How long the toast stays visible
+        }, 500);
+    }, 3000);
 }
 
 
