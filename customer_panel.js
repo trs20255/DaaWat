@@ -23,6 +23,7 @@ let html5QrCode = null;
 let allRestaurantsCache = []; // Cache for search
 let allMenuItemsCache = []; // Cache for search
 let adSliderInterval = null; // For advertisement slider
+let cartButtonTimeout = null;
 
 
 // --- UI REFERENCES ---
@@ -52,23 +53,24 @@ const mobileLogoutBtn = document.getElementById('mobile-logout-btn');
 
 // --- CORE APP & AUTH LOGIC ---
 async function initializeApp() {
-    // 1. Fetch settings ONCE for the initial page load.
+    const savedCart = localStorage.getItem('unifoodCart');
+    if (savedCart) {
+        cart = JSON.parse(savedCart);
+    }
+
     const settingsDoc = await db.collection('settings').doc('config').get();
     if (settingsDoc.exists) {
         siteSettings = settingsDoc.data();
     }
     applySiteSettings();
 
-    // 2. The onAuthStateChanged will now handle the real-time listener.
     auth.onAuthStateChanged(async (user) => {
         cleanupListeners();
         if (activePortalHandler) {
             mainContent.removeEventListener('click', activePortalHandler);
             activePortalHandler = null;
         }
-        cart = [];
-        updateCartButton();
-
+        
         if (user) {
             const userDoc = await db.collection('users').doc(user.uid).get();
             if (userDoc.exists) {
@@ -94,15 +96,13 @@ async function initializeApp() {
                 showView('app');
                 loadPortal(currentUser);
 
-                // +++ 3. ADD THE REAL-TIME LISTENER HERE, AFTER THE PORTAL IS LOADED +++
                 const settingsListener = db.collection('settings').doc('config').onSnapshot(doc => {
-                    console.log("Customer Panel: Real-time settings received!"); // For debugging
                     if (doc.exists) {
                         siteSettings = doc.data();
-                        applySiteSettings(); // This now works on the correct UI
+                        applySiteSettings();
                     }
                 });
-                unsubscribeListeners.push(settingsListener); // Add to cleanup queue
+                unsubscribeListeners.push(settingsListener);
 
             } else {
                 showSimpleModal("Error", "Your user data could not be found. You have been logged out.");
@@ -117,6 +117,7 @@ async function initializeApp() {
                 showView('auth');
             }
         }
+        updateCartButton();
     });
 }
 
@@ -131,7 +132,6 @@ function logAudit(action, details) {
 }
 
 function applySiteSettings() {
-    // Safely access the nested theme object
     const theme = siteSettings.theme || {};
     const globalTheme = theme.global || {};
 
@@ -141,14 +141,12 @@ function applySiteSettings() {
     }
     if (siteSettings.logoUrl) websiteLogoHeader.src = siteSettings.logoUrl;
     
-    // Read colors from the correct nested globalTheme object
     document.documentElement.style.setProperty('--primary-color', globalTheme.primaryColor || '#1a202c');
     document.documentElement.style.setProperty('--secondary-color', globalTheme.secondaryColor || '#D4AF37');
     document.documentElement.style.setProperty('--background-color', globalTheme.backgroundColor || '#F8F9FA');
     document.documentElement.style.setProperty('--text-color', globalTheme.textColor || '#1f2937');
     document.documentElement.style.setProperty('--button-text-color', globalTheme.buttonTextColor || '#ffffff');
     
-    // Gradient logic for header
     if (globalTheme.useGradient) {
         const gradient = `linear-gradient(to right, ${globalTheme.gradientStart || '#4c51bf'}, ${globalTheme.gradientEnd || '#6b46c1'})`;
         document.documentElement.style.setProperty('--header-bg', gradient);
@@ -255,7 +253,6 @@ function initializeCustomerPortal() {
     activePortalHandler = handleCustomerClicks;
     mainContent.addEventListener('click', activePortalHandler);
     
-    // Set up global search
     const desktopSearch = document.getElementById('global-search-bar');
     const mobileSearch = document.getElementById('mobile-global-search-bar');
     desktopSearch.addEventListener('input', handleGlobalSearch);
@@ -285,7 +282,7 @@ function initializeCustomerPortal() {
                     removeFromCart(itemId);
                     break;
                 case 'add-to-cart':
-                    addToCart(itemId, itemName, parseFloat(itemPrice), restaurantId, restaurantName);
+                    addToCart(itemId, itemName, parseFloat(itemPrice), restaurantId, restaurantName, actionButton);
                     break;
             }
         }
@@ -293,6 +290,28 @@ function initializeCustomerPortal() {
 
     cartButton.addEventListener('click', renderCartView);
     renderCustomerView('home');
+
+    const setupClearButton = (inputEl) => {
+        const parent = inputEl.parentNode;
+        const clearBtn = document.createElement('button');
+        clearBtn.innerHTML = '<i data-feather="x" class="w-5 h-5 text-gray-500"></i>';
+        clearBtn.className = 'absolute inset-y-0 right-0 pr-4 flex items-center hidden';
+        parent.appendChild(clearBtn);
+        feather.replace();
+
+        inputEl.addEventListener('input', () => {
+            clearBtn.classList.toggle('hidden', inputEl.value === '');
+        });
+
+        clearBtn.addEventListener('click', () => {
+            inputEl.value = '';
+            inputEl.dispatchEvent(new Event('input'));
+            clearBtn.classList.add('hidden');
+        });
+    };
+    
+    setupClearButton(desktopSearch);
+    setupClearButton(mobileSearch);
 }
 
 function handleCustomerClicks(e) {
@@ -331,11 +350,12 @@ function handleCustomerClicks(e) {
         const { action, restaurantId, restaurantName, itemId, itemName, itemPrice, orderId } = actionButton.dataset;
         switch(action) {
             case 'back-to-home': renderCustomerView('home'); break;
-            case 'add-to-cart': addToCart(itemId, itemName, parseFloat(itemPrice), restaurantId, restaurantName); break;
+            case 'add-to-cart': addToCart(itemId, itemName, parseFloat(itemPrice), restaurantId, restaurantName, actionButton); break;
             case 'view-bill': renderOrderBill(orderId); break;
             case 'rate-order': showRatingForm(orderId); break;
             case 'view-item-details': renderMenuItemDetailView(itemId, restaurantId); break;
             case 'cancel-order': handleCancelOrder(orderId); break;
+            case 'reorder': handleReorder(orderId); break;
         }
     }
 }
@@ -347,6 +367,7 @@ function renderCustomerView(viewName) {
 
     const contentArea = document.getElementById('customer-main-content');
     cartButton.classList.add('hidden');
+    cleanupListeners(); // Clean up old scroll listeners
 
     switch(viewName) {
         case 'home': renderCustomerHomepage(contentArea); break;
@@ -371,6 +392,17 @@ async function renderCustomerHomepage(contentArea) {
         </div>
     `).join('');
 
+    const skeletonCardHtml = `
+        <div class="restaurant-card bg-white overflow-hidden">
+            <div class="skeleton skeleton-img"></div>
+            <div class="p-5">
+                <div class="skeleton skeleton-title"></div>
+                <div class="skeleton skeleton-text"></div>
+            </div>
+        </div>
+    `;
+    const skeletonList = Array(3).fill(skeletonCardHtml).join('');
+
     contentArea.innerHTML = `
         <div id="homepage-content" class="space-y-12">
             <div>
@@ -387,47 +419,31 @@ async function renderCustomerHomepage(contentArea) {
 
             <div>
                 <h3 class="text-2xl font-bold font-serif mb-4">All Restaurants</h3>
-                <div id="all-restaurants-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
+                <div id="all-restaurants-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    ${skeletonList}
+                </div>
             </div>
         </div>
         <div id="search-results-container" class="hidden"></div>`;
+    feather.replace();
 
-    // Fetch and display ALL enabled advertisements with a beautiful carousel
     const adContainer = document.getElementById('advertisement-container');
-    // Stop any previous slider animation
     clearInterval(adSliderInterval);
 
     db.collection('advertisements').where('isEnabled', '==', true).get().then(snapshot => {
         if (!snapshot.empty) {
-            const adsHtml = snapshot.docs.map(doc => {
-                const adData = doc.data();
-                // Note: the class is changed to just 'advertisement-card' for the carousel logic
-                return `
-                    <div data-id="${adData.restaurantId}" class="advertisement-card">
-                        <img src="${adData.imageUrl}" alt="Advertisement">
-                    </div>
-                `;
-            }).join('');
-
-            // New HTML structure for the carousel
+            const adsHtml = snapshot.docs.map(doc => `<div data-id="${doc.data().restaurantId}" class="advertisement-card"><img src="${doc.data().imageUrl}" alt="Advertisement"></div>`).join('');
             adContainer.innerHTML = `
                 <h3 class="text-2xl font-bold font-serif mb-4">Special Offers</h3>
-                <div class="advertisement-carousel-wrapper">
-                    ${adsHtml}
-                </div>
-                <div class="carousel-dots"></div>
-            `;
-
-            // Start the carousel animation only if there is more than one advertisement
+                <div class="advertisement-carousel-wrapper">${adsHtml}</div>
+                <div class="carousel-dots"></div>`;
             if (snapshot.docs.length > 1) {
                 startAdvertisementCarousel();
             } else if (snapshot.docs.length === 1) {
-                // If only one ad, just make it active and visible
                 document.querySelector('.advertisement-card').classList.add('active');
             }
-
         } else {
-            adContainer.innerHTML = ''; // Clear the container if no ads are found
+            adContainer.innerHTML = '';
         }
     });
 
@@ -438,7 +454,6 @@ async function renderCustomerHomepage(contentArea) {
     allMenuItemsCache = [];
 
     const snapshot = await db.collection('restaurants').where("isLocked", "==", false).get();
-
     if (snapshot.empty) {
         allListEl.innerHTML = '<p>No restaurants available right now.</p>';
         featuredListEl.innerHTML = '<p>No featured restaurants.</p>';
@@ -446,12 +461,10 @@ async function renderCustomerHomepage(contentArea) {
         return;
     }
 
-    const menuPromises = [];
-    snapshot.docs.forEach(doc => {
+    const menuPromises = snapshot.docs.map(doc => {
         const restaurantData = { id: doc.id, ...doc.data() };
         allRestaurantsCache.push(restaurantData);
-
-        const menuPromise = db.collection('restaurants').doc(doc.id).collection('menu').get().then(menuSnapshot => {
+        return db.collection('restaurants').doc(doc.id).collection('menu').get().then(menuSnapshot => {
             menuSnapshot.forEach(menuDoc => {
                 allMenuItemsCache.push({
                     ...menuDoc.data(),
@@ -461,21 +474,11 @@ async function renderCustomerHomepage(contentArea) {
                 });
             });
         });
-        menuPromises.push(menuPromise);
     });
 
     await Promise.all(menuPromises);
 
-    // Sorting Logic: 1. By displayPriority (ascending), 2. By avgRating (descending)
-    allRestaurantsCache.sort((a, b) => {
-        const priorityA = a.displayPriority || 99;
-        const priorityB = b.displayPriority || 99;
-        if (priorityA !== priorityB) {
-            return priorityA - priorityB;
-        }
-        return (b.avgRating || 0) - (a.avgRating || 0);
-    });
-    
+    allRestaurantsCache.sort((a, b) => (a.displayPriority || 99) - (b.displayPriority || 99) || (b.avgRating || 0) - (a.avgRating || 0));
     const featuredRestaurants = [...allRestaurantsCache].sort((a,b) => (b.avgRating || 0) - (a.avgRating || 0)).slice(0, 5);
 
     featuredListEl.innerHTML = featuredRestaurants.map(r => renderFeaturedRestaurantCard({ id: r.id, data: () => r })).join('');
@@ -484,9 +487,6 @@ async function renderCustomerHomepage(contentArea) {
     feather.replace();
 }
 
-/**
- * Initializes a beautiful, modern carousel for the advertisements.
- */
 function startAdvertisementCarousel() {
     const wrapper = document.querySelector('.advertisement-carousel-wrapper');
     const dotsContainer = document.querySelector('.carousel-dots');
@@ -496,17 +496,14 @@ function startAdvertisementCarousel() {
     const totalCards = cards.length;
     let currentIndex = 0;
 
-    // Create navigation dots
     dotsContainer.innerHTML = cards.map((_, index) => `<div class="dot" data-index="${index}"></div>`).join('');
     const dots = dotsContainer.querySelectorAll('.dot');
 
     const updateCarousel = (newIndex) => {
         currentIndex = newIndex;
-
         cards.forEach((card, index) => {
             card.classList.remove('active', 'prev', 'next', 'hidden-prev', 'hidden-next');
             dots[index].classList.remove('active');
-
             if (index === currentIndex) {
                 card.classList.add('active');
                 dots[index].classList.add('active');
@@ -522,26 +519,17 @@ function startAdvertisementCarousel() {
         });
     };
     
-    // Set up auto-play
-    const autoPlay = () => {
-        const nextIndex = (currentIndex + 1) % totalCards;
-        updateCarousel(nextIndex);
-    };
+    const autoPlay = () => updateCarousel((currentIndex + 1) % totalCards);
+    adSliderInterval = setInterval(autoPlay, 4000);
 
-    adSliderInterval = setInterval(autoPlay, 4000); // Slide every 4 seconds
-
-    // Add click events to dots
     dots.forEach(dot => {
         dot.addEventListener('click', () => {
-            const newIndex = parseInt(dot.dataset.index);
-            updateCarousel(newIndex);
-            // Reset interval on manual navigation
+            updateCarousel(parseInt(dot.dataset.index));
             clearInterval(adSliderInterval);
-            adSliderInterval = setInterval(autoPlay, 5000); // Restart with a slightly longer delay
+            adSliderInterval = setInterval(autoPlay, 5000);
         });
     });
 
-    // Initialize the carousel to the first slide
     updateCarousel(0);
 }
 
@@ -587,8 +575,6 @@ function renderRestaurantCard(doc) {
         </div>`;
 }
 
-// --- ADVANCED SEARCH LOGIC ---
-
 function handleGlobalSearch(e) {
     const searchTerm = e.target.value.trim().toLowerCase();
     const activeNav = document.querySelector('#customer-nav .sidebar-link.active');
@@ -612,11 +598,7 @@ function searchOrders(searchTerm) {
         const restaurantName = card.dataset.restaurantName.toLowerCase();
         const itemNames = card.dataset.itemNames.toLowerCase();
 
-        if (orderId.includes(searchTerm) || restaurantName.includes(searchTerm) || itemNames.includes(searchTerm)) {
-            card.style.display = 'block';
-        } else {
-            card.style.display = 'none';
-        }
+        card.style.display = (orderId.includes(searchTerm) || restaurantName.includes(searchTerm) || itemNames.includes(searchTerm)) ? 'block' : 'none';
     });
 }
 
@@ -649,11 +631,8 @@ function searchRestaurantsAndFood(searchTerm) {
     );
 
     let matchingItems = allMenuItemsCache.filter(item => 
-        item.name.toLowerCase().includes(query)
+        item.name.toLowerCase().includes(query) && (priceLimit === null || item.price < priceLimit)
     );
-    if (priceLimit !== null) {
-        matchingItems = matchingItems.filter(item => item.price < priceLimit);
-    }
     
     let resultsHtml = '';
     
@@ -694,13 +673,11 @@ function searchRestaurantsAndFood(searchTerm) {
     });
 }
 
-// NEW: This function will control the sticky behavior of the category bar
 function initializeStickyCategoryBar() {
     const barWrapper = document.getElementById('category-quick-links-wrapper');
     const mainContentArea = document.getElementById('customer-main-content');
     if (!barWrapper) return;
 
-    // Create a placeholder to prevent content from jumping when the bar becomes fixed
     const placeholder = document.createElement('div');
     placeholder.style.height = `${barWrapper.offsetHeight}px`;
     barWrapper.parentNode.insertBefore(placeholder, barWrapper);
@@ -710,13 +687,10 @@ function initializeStickyCategoryBar() {
              window.removeEventListener('scroll', onScroll);
              return;
         }
-
         const stickyPoint = placeholder.getBoundingClientRect().top;
         const mainContentRect = mainContentArea.getBoundingClientRect();
-
-        if (stickyPoint <= 80) { // 80px should be the height of your main header
+        if (stickyPoint <= 80) {
             if (!barWrapper.classList.contains('is-fixed')) {
-                // Set width and left position just before making it fixed
                 barWrapper.style.width = `${mainContentRect.width}px`;
                 barWrapper.style.left = `${mainContentRect.left}px`;
                 barWrapper.classList.add('is-fixed');
@@ -724,7 +698,6 @@ function initializeStickyCategoryBar() {
         } else {
             if (barWrapper.classList.contains('is-fixed')) {
                 barWrapper.classList.remove('is-fixed');
-                // Clear inline styles so it returns to normal
                 barWrapper.style.width = '';
                 barWrapper.style.left = '';
             }
@@ -732,10 +705,8 @@ function initializeStickyCategoryBar() {
     };
 
     window.addEventListener('scroll', onScroll);
-    // Add a way to clean up this listener when we navigate away
     unsubscribeListeners.push(() => window.removeEventListener('scroll', onScroll));
 }
-
 
 async function renderCustomerRestaurantView(restaurantId) {
     const contentArea = document.getElementById('customer-main-content');
@@ -798,6 +769,8 @@ async function renderCustomerRestaurantView(restaurantId) {
                 const isAvailable = item.isAvailable !== false;
                 const itemImage = item.imageUrl || 'https://placehold.co/400x300?text=Food';
                 const variants = item.variants && item.variants.length > 0 ? item.variants : [{ name: '', price: item.price }];
+                const dietType = item.isVeg ? 'veg' : 'non-veg';
+                const dietColor = item.isVeg ? 'border-green-500' : 'border-red-500';
 
                 let mobilePricingHtml;
                 if (variants.length > 1) {
@@ -815,11 +788,16 @@ async function renderCustomerRestaurantView(restaurantId) {
                         </div>`;
                 }
                 const mobileCard = `
-                    <div class="block md:hidden bg-white rounded-xl shadow-md overflow-hidden transition-shadow hover:shadow-lg flex flex-col cursor-pointer ${!isAvailable ? 'opacity-60 bg-gray-50 cursor-not-allowed' : ''}"
+                    <div data-diet="${dietType}" class="menu-item block md:hidden bg-white rounded-xl shadow-md overflow-hidden transition-shadow hover:shadow-lg flex flex-col cursor-pointer ${!isAvailable ? 'opacity-60 bg-gray-50 cursor-not-allowed' : ''}"
                         data-action="view-item-details" data-item-id="${doc.id}" data-restaurant-id="${restaurantId}">
                         <img src="${itemImage}" class="w-full h-32 object-cover">
                         <div class="p-3 flex flex-col flex-grow">
-                            <p class="font-bold font-serif flex-grow">${item.name}</p>
+                            <p class="font-bold font-serif flex-grow flex items-center">
+                                <span class="w-4 h-4 mr-2 border-2 ${dietColor} flex items-center justify-center">
+                                    <span class="w-2 h-2 rounded-full ${item.isVeg ? 'bg-green-500' : 'bg-red-500'}"></span>
+                                </span>
+                                ${item.name}
+                            </p>
                             ${mobilePricingHtml}
                         </div>
                     </div>`;
@@ -846,11 +824,16 @@ async function renderCustomerRestaurantView(restaurantId) {
                         </div>`;
                 }
                 const desktopCard = `
-                    <div class="hidden md:flex bg-white rounded-xl shadow-md overflow-hidden transition-shadow hover:shadow-lg items-center gap-4 p-4 cursor-pointer ${!isAvailable ? 'opacity-60 bg-gray-50 cursor-not-allowed' : ''}"
+                    <div data-diet="${dietType}" class="menu-item hidden md:flex bg-white rounded-xl shadow-md overflow-hidden transition-shadow hover:shadow-lg items-center gap-4 p-4 cursor-pointer ${!isAvailable ? 'opacity-60 bg-gray-50 cursor-not-allowed' : ''}"
                         data-action="view-item-details" data-item-id="${doc.id}" data-restaurant-id="${restaurantId}">
                         <img src="${itemImage}" class="w-24 h-24 object-cover rounded-lg flex-shrink-0">
                         <div class="flex-grow text-left w-full">
-                            <p class="font-bold text-lg font-serif">${item.name}</p>
+                            <p class="font-bold text-lg font-serif flex items-center">
+                                <span class="w-4 h-4 mr-2 border-2 ${dietColor} flex items-center justify-center">
+                                    <span class="w-2 h-2 rounded-full ${item.isVeg ? 'bg-green-500' : 'bg-red-500'}"></span>
+                                </span>
+                                ${item.name}
+                            </p>
                             <p class="text-sm text-gray-500 mt-1 mb-2">${item.description || ''}</p>
                             <div>${desktopPricingHtml}</div>
                         </div>
@@ -888,6 +871,13 @@ async function renderCustomerRestaurantView(restaurantId) {
                 <p class="text-gray-600 mt-1">${restaurant.cuisine}</p>
                 <p class="text-gray-500 mt-2 flex items-center"><i data-feather="map-pin" class="w-4 h-4 mr-2 flex-shrink-0"></i><span>${restaurant.address || ''}</span></p>
                 
+                <div class="flex items-center gap-4 my-4 p-2 bg-gray-100 rounded-lg">
+                    <p class="font-semibold">Show:</p>
+                    <button data-filter="all" class="diet-filter-btn active">All</button>
+                    <button data-filter="veg" class="diet-filter-btn">Veg</button>
+                    <button data-filter="non-veg" class="diet-filter-btn">Non-Veg</button>
+                </div>
+
                 <div id="menu-container" class="mt-6 border-t pt-2">
                      ${menuHtml}
                 </div>
@@ -916,6 +906,26 @@ async function renderCustomerRestaurantView(restaurantId) {
                     block: 'start'
                 });
             }
+        });
+    }
+
+    const dietFilterContainer = contentArea.querySelector('.diet-filter-btn').parentNode;
+    if (dietFilterContainer) {
+        dietFilterContainer.addEventListener('click', (e) => {
+            const filterBtn = e.target.closest('.diet-filter-btn');
+            if (!filterBtn) return;
+
+            dietFilterContainer.querySelectorAll('.diet-filter-btn').forEach(btn => btn.classList.remove('active'));
+            filterBtn.classList.add('active');
+
+            const filterType = filterBtn.dataset.filter;
+            contentArea.querySelectorAll('.menu-item').forEach(item => {
+                if (filterType === 'all' || item.dataset.diet === filterType) {
+                    item.classList.remove('filtered-out');
+                } else {
+                    item.classList.add('filtered-out');
+                }
+            });
         });
     }
 }
@@ -995,7 +1005,14 @@ async function renderCustomerOrdersView(contentArea) {
     const unsub = db.collection('orders').where('customerId', '==', currentUser.uid)
         .onSnapshot(snapshot => {
             if (snapshot.empty) {
-                listEl.innerHTML = '<p class="text-center bg-white p-6 rounded-lg shadow-md">You have no orders.</p>';
+                listEl.innerHTML = `
+                    <div class="text-center bg-white p-8 rounded-lg shadow-md">
+                        <i data-feather="package" class="w-16 h-16 mx-auto text-gray-400"></i>
+                        <h3 class="text-2xl font-bold font-serif mt-4 mb-2">No Orders Yet</h3>
+                        <p class="text-gray-600 mb-6">Your past and current orders will appear here.</p>
+                        <button data-action="back-to-home" class="btn btn-primary rounded-lg py-3 px-8">Order Now</button>
+                    </div>`;
+                feather.replace();
                 return;
             }
             const sortedDocs = snapshot.docs.sort((a, b) => b.data().createdAt.seconds - a.data().createdAt.seconds);
@@ -1019,12 +1036,16 @@ function renderCustomerOrderCard(orderId, orderData) {
 
     let actionButtons = `<button data-action="view-bill" data-order-id="${orderId}" class="btn btn-primary py-2 px-4">View Bill</button>`;
     
+    if (orderData.status === 'delivered' || orderData.status === 'completed') {
+        actionButtons += `<button data-action="reorder" data-order-id="${orderId}" class="btn btn-secondary ml-2 py-2 px-4">Reorder</button>`;
+    }
+    
     if (orderData.status === 'placed') {
         actionButtons += `<button data-action="cancel-order" data-order-id="${orderId}" class="btn btn-danger ml-2 py-2 px-4">Cancel Order</button>`;
     }
 
     if ((orderData.status === 'delivered' || orderData.status === 'completed') && !orderData.isReviewed) {
-        actionButtons += `<button data-action="rate-order" data-order-id="${orderId}" class="btn btn-secondary ml-2 py-2 px-4">Rate Order</button>`;
+        actionButtons += `<button data-action="rate-order" data-order-id="${orderId}" class="btn bg-gray-200 text-gray-800 ml-2 py-2 px-4">Rate Order</button>`;
     }
 
     const itemNames = orderData.items.map(i => i.name).join(' ');
@@ -1088,7 +1109,7 @@ function renderCustomerProfile(contentArea) {
 }
 
 // --- CART LOGIC ---
-function addToCart(itemId, itemName, itemPrice, restaurantId, restaurantName) {
+function addToCart(itemId, itemName, itemPrice, restaurantId, restaurantName, buttonElement) {
     if (cart.length > 0 && cart[0].restaurantId !== restaurantId) {
         showConfirmationModal(
             "Start New Order?",
@@ -1097,6 +1118,7 @@ function addToCart(itemId, itemName, itemPrice, restaurantId, restaurantName) {
                 cart = [{ id: itemId, name: itemName, price: itemPrice, quantity: 1, restaurantId, restaurantName }];
                 updateCartButton();
                 showToast(`${itemName} added to cart!`);
+                if (buttonElement) animateCartButton(buttonElement);
             }
         );
         return;
@@ -1110,6 +1132,8 @@ function addToCart(itemId, itemName, itemPrice, restaurantId, restaurantName) {
     }
     updateCartButton();
     showToast(`${itemName} added to cart!`);
+    if (buttonElement) animateCartButton(buttonElement);
+    localStorage.setItem('unifoodCart', JSON.stringify(cart));
 }
 
 function removeFromCart(itemId) {
@@ -1118,7 +1142,12 @@ function removeFromCart(itemId) {
         if (--cart[itemIndex].quantity === 0) cart.splice(itemIndex, 1);
     }
     updateCartButton();
-    cart.length === 0 ? closeModal() : renderCartView();
+    localStorage.setItem('unifoodCart', JSON.stringify(cart));
+    if (cart.length === 0) {
+        closeModal();
+    } else {
+        renderCartView();
+    }
 }
 
 function updateCartButton() {
@@ -1127,9 +1156,36 @@ function updateCartButton() {
     cartButton.classList.toggle('hidden', totalItems === 0);
 }
 
+function animateCartButton(button) {
+    const originalContent = button.innerHTML;
+    button.innerHTML = `<i data-feather="check" class="w-5 h-5"></i> Added`;
+    feather.replace();
+    button.classList.add('bg-green-500');
+    
+    if (cartButtonTimeout) clearTimeout(cartButtonTimeout);
+    cartButton.classList.add('transform', 'scale-125');
+
+    setTimeout(() => {
+        button.innerHTML = originalContent;
+        button.classList.remove('bg-green-500');
+    }, 1500);
+
+    cartButtonTimeout = setTimeout(() => {
+        cartButton.classList.remove('transform', 'scale-125');
+    }, 500);
+}
+
 async function renderCartView() {
     if (cart.length === 0) {
-        showSimpleModal("Empty Cart", "Your shopping cart is empty.");
+        const emptyCartHtml = `
+            <div class="text-center p-4">
+                <i data-feather="shopping-cart" class="w-16 h-16 mx-auto text-gray-400"></i>
+                <h3 class="text-2xl font-bold font-serif mt-4 mb-2">Your Cart is Empty</h3>
+                <p class="text-gray-600 mb-6">Looks like you haven't added anything to your cart yet.</p>
+                <button data-action="back-to-home" class="btn btn-primary rounded-lg py-3 px-8" onclick="closeModal()">Start Shopping</button>
+            </div>
+        `;
+        showModal(emptyCartHtml);
         return;
     }
 
@@ -1313,7 +1369,11 @@ async function handlePlaceOrder(form) {
         const docRef = await db.collection('orders').add(orderData);
         await logAudit("Order Placed", `Order ID: ${docRef.id}`);
         showSimpleModal('Order Placed!', 'Your order has been placed successfully.');
-        cart = []; updateCartButton(); closeModal(); renderCustomerView('orders');
+        cart = []; 
+        updateCartButton(); 
+        localStorage.removeItem('unifoodCart');
+        closeModal(); 
+        renderCustomerView('orders');
     } catch (error) {
         console.error("Error placing order: ", error);
         showSimpleModal('Order Error', 'There was an error placing your order. Please try again.');
@@ -1323,6 +1383,39 @@ async function handlePlaceOrder(form) {
             animatedOrderBtn.classList.remove('animating');
             animatedOrderBtn.disabled = false;
         }
+    }
+}
+
+async function handleReorder(orderId) {
+    const orderDoc = await db.collection('orders').doc(orderId).get();
+    if (!orderDoc.exists) {
+        showToast("Order not found.", "error");
+        return;
+    }
+    const orderData = orderDoc.data();
+
+    const reorderAction = () => {
+        cart = orderData.items.map(item => ({
+            id: item.id,
+            name: item.name,
+            price: item.price,
+            quantity: item.quantity,
+            restaurantId: orderData.restaurantId,
+            restaurantName: orderData.restaurantName
+        }));
+        localStorage.setItem('unifoodCart', JSON.stringify(cart));
+        updateCartButton();
+        renderCartView();
+    };
+
+    if (cart.length > 0 && cart[0].restaurantId !== orderData.restaurantId) {
+        showConfirmationModal(
+            "Clear Your Cart?",
+            "Reordering will clear your current cart. Do you want to continue?",
+            reorderAction
+        );
+    } else {
+        reorderAction();
     }
 }
 
@@ -1582,3 +1675,4 @@ function getAiResponse(message) {
 }
 
 feather.replace();
+
