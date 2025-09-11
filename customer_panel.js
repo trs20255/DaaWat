@@ -20,9 +20,9 @@ let activePortalHandler = null;
 let siteSettings = {};
 let cart = [];
 let html5QrCode = null;
-let allRestaurantsCache = []; // Cache for search
-let allMenuItemsCache = []; // Cache for search
-let adSliderInterval = null; // For advertisement slider
+let allRestaurantsCache = [];
+let allMenuItemsCache = [];
+let adSliderInterval = null;
 let cartButtonTimeout = null;
 // NEW: Sound for customer notifications
 const customerNotificationSound = new Audio('https://cdn.jsdelivr.net/npm/ion-sound@3.0.7/sounds/bell_ring.mp3');
@@ -83,14 +83,6 @@ async function initializeApp() {
                     return;
                 }
                 
-                if (currentUser.role === 'restaurant' && (await db.collection('restaurants').doc(currentUser.restaurantId).get()).data().isLocked) {
-                    showSimpleModal("Account Locked", "Your restaurant account is currently locked. Please contact support."); auth.signOut(); return;
-                }
-
-                if (currentUser.role === 'delivery' && currentUser.isLocked) {
-                     showSimpleModal("Account Locked", "Your delivery account is currently locked. Please contact support."); auth.signOut(); return;
-                }
-                
                 const userHtml = `<p class="font-semibold">${currentUser.name}</p><p class="text-xs text-gray-500 capitalize">${currentUser.role}</p>`;
                 userInfo.innerHTML = userHtml;
                 mobileUserInfo.innerHTML = userHtml;
@@ -124,13 +116,11 @@ async function initializeApp() {
     });
 }
 
-// NEW: Function to listen for order status changes for the current customer
+// NEW & FIXED: Robust function to listen for order status changes
 function listenForOrderStatusUpdates() {
     if (!currentUser) return;
 
-    const query = db.collection('orders')
-        .where('customerId', '==', currentUser.uid)
-        .where('status', 'in', ['accepted', 'ready-for-pickup']);
+    const query = db.collection('orders').where('customerId', '==', currentUser.uid);
 
     const unsub = query.onSnapshot(snapshot => {
         snapshot.docChanges().forEach(change => {
@@ -138,7 +128,7 @@ function listenForOrderStatusUpdates() {
                 const orderData = change.doc.data();
                 if (orderData.status === 'ready-for-pickup' && orderData.deliveryType === 'takeaway') {
                     customerNotificationSound.play().catch(e => console.error("Customer notification sound failed:", e));
-                    showToast(`Your order from ${orderData.restaurantName} is ready for pickup!`, 'info');
+                    showToast(`Order from ${orderData.restaurantName} is ready for pickup!`, 'info');
                 }
             }
         });
@@ -565,7 +555,7 @@ function renderFeaturedRestaurantCard(doc) {
     const isClosed = r.isOpen === false;
     
     return `
-        <div data-id="${doc.id}" data-name="${r.name}" data-cuisine="${r.cuisine}" class="featured-restaurant-card ${isClosed ? 'opacity-50' : ''}">
+        <div data-id="${doc.id}" data-name="${r.name}" data-cuisine="${r.cuisine}" class="featured-restaurant-card flex-shrink-0 ${isClosed ? 'opacity-50' : ''}">
             <div class="img-container relative">
                 <img src="${firstImage}" alt="${r.name}">
                 ${isClosed ? `<div class="absolute inset-0 bg-black/50 flex items-center justify-center"><span class="text-white font-bold text-sm">CLOSED</span></div>` : ''}
@@ -1310,16 +1300,8 @@ async function renderCartView() {
             </div>
             <div class="mt-6">
                 <label class="block text-sm font-medium text-gray-700">Payment Method</label>
-                <div class="mt-2 flex gap-x-6">
-                    <label class="flex items-center">
-                        <input type="radio" name="paymentType" value="cod" class="form-radio h-4 w-4 text-indigo-600 border-gray-300 focus:ring-indigo-500" checked>
-                        <span class="ml-2 text-sm text-gray-700">Cash on Delivery</span>
-                    </label>
-                    <label class="flex items-center">
-                        <input type="radio" name="paymentType" value="online" class="form-radio h-4 w-4 text-indigo-600 border-gray-300 focus:ring-indigo-500">
-                        <span class="ml-2 text-sm text-gray-700">Online Payment</span>
-                    </label>
-                </div>
+                <div id="payment-method-container" class="mt-2">
+                    </div>
             </div>
             <div class="mt-6">
                 ${animatedButtonHtml}
@@ -1332,6 +1314,7 @@ async function renderCartView() {
         const deliveryFeeLine = document.getElementById('delivery-fee-line');
         const deliveryAddressContainer = document.getElementById('delivery-address-container');
         const grandTotalEl = document.getElementById('grand-total');
+        const paymentContainer = document.getElementById('payment-method-container');
         
         let newTotal = subtotal + gst + platformFee;
         
@@ -1340,10 +1323,28 @@ async function renderCartView() {
             deliveryAddressContainer.classList.remove('hidden');
             document.getElementById('delivery-address').required = true;
             newTotal += deliveryFee;
+            // NEW: Show standard payment options for delivery
+            paymentContainer.innerHTML = `
+                <div class="flex gap-x-6">
+                    <label class="flex items-center">
+                        <input type="radio" name="paymentType" value="cod" class="form-radio" checked>
+                        <span class="ml-2 text-sm text-gray-700">Cash on Delivery</span>
+                    </label>
+                    <label class="flex items-center">
+                        <input type="radio" name="paymentType" value="online" class="form-radio">
+                        <span class="ml-2 text-sm text-gray-700">Online Payment</span>
+                    </label>
+                </div>`;
         } else { // takeaway
             deliveryFeeLine.classList.add('hidden');
             deliveryAddressContainer.classList.add('hidden');
             document.getElementById('delivery-address').required = false;
+             // NEW: Show only counter payment for takeaway
+            paymentContainer.innerHTML = `
+                <div class="p-2 bg-gray-100 rounded-md text-gray-700">
+                    <p class="font-semibold">Cash/Online at Counter</p>
+                    <input type="hidden" name="paymentType" value="at_counter">
+                </div>`;
         }
         grandTotalEl.textContent = `₹${newTotal.toFixed(2)}`;
     });
@@ -1582,6 +1583,7 @@ async function showRatingForm(orderId) {
     document.getElementById('rating-form').addEventListener('submit', e => handlePostReview(e, orderId, order));
 }
 
+// FIXED: Made the rating update logic more robust
 async function handlePostReview(e, orderId, orderData) {
     e.preventDefault(); const form = e.target;
     const restaurantRating = parseInt(form.elements.restaurantRating.value);
@@ -1600,11 +1602,11 @@ async function handlePostReview(e, orderId, orderData) {
     await db.collection('orders').doc(orderId).update({ isReviewed: true });
 
     const updateAvgRating = async (collection, docId, newRating) => {
-        if (!docId) return; // FIXED: Do not proceed if docId is null or undefined
+        if (!docId) return; // Do not proceed if docId is null or undefined
         const ref = db.collection(collection).doc(docId);
         return db.runTransaction(async (transaction) => {
             const doc = await transaction.get(ref);
-            if (!doc.exists) return;
+            if (!doc.exists) return; // Do not proceed if the document (e.g., user) was deleted
             const data = doc.data();
             const currentRating = data.avgRating || 0;
             const ratingCount = data.ratingCount || 0;
@@ -1617,7 +1619,6 @@ async function handlePostReview(e, orderId, orderData) {
     };
     
     await updateAvgRating('restaurants', orderData.restaurantId, restaurantRating);
-    // FIXED: Only update delivery boy rating if one was assigned
     if (orderData.deliveryBoyId) {
         await updateAvgRating('users', orderData.deliveryBoyId, deliveryRating);
     }
