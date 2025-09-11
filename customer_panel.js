@@ -24,6 +24,8 @@ let allRestaurantsCache = []; // Cache for search
 let allMenuItemsCache = []; // Cache for search
 let adSliderInterval = null; // For advertisement slider
 let cartButtonTimeout = null;
+// NEW: Sound for customer notifications
+const customerNotificationSound = new Audio('https://cdn.jsdelivr.net/npm/ion-sound@3.0.7/sounds/bell_ring.mp3');
 
 
 // --- UI REFERENCES ---
@@ -95,6 +97,7 @@ async function initializeApp() {
                 
                 showView('app');
                 loadPortal(currentUser);
+                listenForOrderStatusUpdates(); // NEW: Start listening for order alerts
 
                 const settingsListener = db.collection('settings').doc('config').onSnapshot(doc => {
                     if (doc.exists) {
@@ -119,6 +122,28 @@ async function initializeApp() {
         }
         updateCartButton();
     });
+}
+
+// NEW: Function to listen for order status changes for the current customer
+function listenForOrderStatusUpdates() {
+    if (!currentUser) return;
+
+    const query = db.collection('orders')
+        .where('customerId', '==', currentUser.uid)
+        .where('status', 'in', ['accepted', 'ready-for-pickup']);
+
+    const unsub = query.onSnapshot(snapshot => {
+        snapshot.docChanges().forEach(change => {
+            if (change.type === 'modified') {
+                const orderData = change.doc.data();
+                if (orderData.status === 'ready-for-pickup' && orderData.deliveryType === 'takeaway') {
+                    customerNotificationSound.play().catch(e => console.error("Customer notification sound failed:", e));
+                    showToast(`Your order from ${orderData.restaurantName} is ready for pickup!`, 'info');
+                }
+            }
+        });
+    });
+    unsubscribeListeners.push(unsub);
 }
 
 
@@ -537,11 +562,13 @@ function startAdvertisementCarousel() {
 function renderFeaturedRestaurantCard(doc) {
     const r = doc.data();
     const firstImage = r.imageUrls && r.imageUrls.length > 0 ? r.imageUrls[0] : 'https://placehold.co/120x120?text=UniFood';
+    const isClosed = r.isOpen === false;
     
     return `
-        <div data-id="${doc.id}" data-name="${r.name}" data-cuisine="${r.cuisine}" class="featured-restaurant-card flex-shrink-0">
-            <div class="img-container">
+        <div data-id="${doc.id}" data-name="${r.name}" data-cuisine="${r.cuisine}" class="featured-restaurant-card ${isClosed ? 'opacity-50' : ''}">
+            <div class="img-container relative">
                 <img src="${firstImage}" alt="${r.name}">
+                ${isClosed ? `<div class="absolute inset-0 bg-black/50 flex items-center justify-center"><span class="text-white font-bold text-sm">CLOSED</span></div>` : ''}
             </div>
             <div class="info mt-2">
                 <h3 class="font-semibold text-gray-800">${r.name}</h3>
@@ -554,12 +581,14 @@ function renderFeaturedRestaurantCard(doc) {
 function renderRestaurantCard(doc) {
     const r = doc.data();
     const firstImage = r.imageUrls && r.imageUrls.length > 0 ? r.imageUrls[0] : 'https://placehold.co/400x250?text=UniFood';
-    const cardClasses = 'restaurant-card group bg-white overflow-hidden cursor-pointer';
+    const isClosed = r.isOpen === false;
+    const cardClasses = `restaurant-card group bg-white overflow-hidden cursor-pointer ${isClosed ? 'opacity-60' : ''}`;
 
     return `
         <div data-id="${doc.id}" data-name="${r.name}" data-cuisine="${r.cuisine}" class="${cardClasses}">
-            <div class="overflow-hidden">
+            <div class="overflow-hidden relative">
                 <img src="${firstImage}" class="w-full h-48 object-cover group-hover:scale-105 transition-transform duration-300 ease-in-out">
+                ${isClosed ? `<div class="absolute inset-0 bg-black/60 flex items-center justify-center"><span class="text-white font-bold text-xl tracking-widest">CURRENTLY CLOSED</span></div>` : ''}
             </div>
             <div class="p-5">
                 <h3 class="font-bold text-xl font-serif">${r.name}</h3>
@@ -717,6 +746,7 @@ async function renderCustomerRestaurantView(restaurantId) {
         return;
     }
     const restaurant = restaurantDoc.data();
+    const isRestaurantClosed = restaurant.isOpen === false; // NEW: Check if restaurant is closed
     const menuSnapshot = await db.collection('restaurants').doc(restaurantId).collection('menu').get();
 
     let callButtonHtml = '';
@@ -767,6 +797,7 @@ async function renderCustomerRestaurantView(restaurantId) {
             const itemsHtml = groupedMenu[category].map(doc => {
                 const item = doc.data();
                 const isAvailable = item.isAvailable !== false;
+                const isDisabled = !isAvailable || isRestaurantClosed; // NEW: Combined disabled check
                 const itemImage = item.imageUrl || 'https://placehold.co/400x300?text=Food';
                 const variants = item.variants && item.variants.length > 0 ? item.variants : [{ name: '', price: item.price }];
                 const dietType = item.isVeg ? 'veg' : 'non-veg';
@@ -782,13 +813,13 @@ async function renderCustomerRestaurantView(restaurantId) {
                             <button 
                                 data-action="add-to-cart" data-item-id="${doc.id}" data-item-name="${item.name}" data-item-price="${variants[0].price}" data-restaurant-id="${restaurantId}" data-restaurant-name="${restaurant.name}" 
                                 class="btn btn-secondary py-2 px-3 rounded-lg font-semibold flex items-center justify-center gap-2" 
-                                ${!isAvailable ? 'disabled' : ''}>
+                                ${isDisabled ? 'disabled' : ''}>
                                 <i data-feather="plus" class="w-5 h-5"></i>
                             </button>
                         </div>`;
                 }
                 const mobileCard = `
-                    <div data-diet="${dietType}" class="menu-item block md:hidden bg-white rounded-xl shadow-md overflow-hidden transition-shadow hover:shadow-lg flex flex-col cursor-pointer ${!isAvailable ? 'opacity-60 bg-gray-50 cursor-not-allowed' : ''}"
+                    <div data-diet="${dietType}" class="menu-item block md:hidden bg-white rounded-xl shadow-md overflow-hidden transition-shadow hover:shadow-lg flex flex-col cursor-pointer ${isDisabled ? 'opacity-60 bg-gray-50 cursor-not-allowed' : ''}"
                         data-action="view-item-details" data-item-id="${doc.id}" data-restaurant-id="${restaurantId}">
                         <img src="${itemImage}" class="w-full h-32 object-cover">
                         <div class="p-3 flex flex-col flex-grow">
@@ -811,7 +842,7 @@ async function renderCustomerRestaurantView(restaurantId) {
                         return `
                         <div class="flex justify-between items-center py-2 border-t mt-2">
                             <div><p class="font-semibold">${v.name || item.name}</p><p class="font-bold text-lg">₹${v.price}</p></div>
-                            <button data-action="add-to-cart" data-item-id="${doc.id}-${v.name}" data-item-name="${cartItemName}" data-item-price="${v.price}" data-restaurant-id="${restaurantId}" data-restaurant-name="${restaurant.name}" class="${desktopButtonClasses}" ${!isAvailable ? 'disabled' : ''}>
+                            <button data-action="add-to-cart" data-item-id="${doc.id}-${v.name}" data-item-name="${cartItemName}" data-item-price="${v.price}" data-restaurant-id="${restaurantId}" data-restaurant-name="${restaurant.name}" class="${desktopButtonClasses}" ${isDisabled ? 'disabled' : ''}>
                                 <i data-feather="plus" class="w-5 h-5 hidden md:inline-block"></i><span>Add to Cart</span></button>
                         </div>`;
                     }).join('');
@@ -819,12 +850,12 @@ async function renderCustomerRestaurantView(restaurantId) {
                     desktopPricingHtml = `
                         <div class="flex items-center justify-between mt-2">
                             <p class="font-bold text-xl text-gray-800">₹${variants[0].price}</p>
-                            <button data-action="add-to-cart" data-item-id="${doc.id}" data-item-name="${item.name}" data-item-price="${variants[0].price}" data-restaurant-id="${restaurantId}" data-restaurant-name="${restaurant.name}" class="${desktopButtonClasses}" ${!isAvailable ? 'disabled' : ''}>
+                            <button data-action="add-to-cart" data-item-id="${doc.id}" data-item-name="${item.name}" data-item-price="${variants[0].price}" data-restaurant-id="${restaurantId}" data-restaurant-name="${restaurant.name}" class="${desktopButtonClasses}" ${isDisabled ? 'disabled' : ''}>
                                 <i data-feather="plus" class="w-5 h-5 hidden md:inline-block"></i><span>Add to Cart</span></button>
                         </div>`;
                 }
                 const desktopCard = `
-                    <div data-diet="${dietType}" class="menu-item hidden md:flex bg-white rounded-xl shadow-md overflow-hidden transition-shadow hover:shadow-lg items-center gap-4 p-4 cursor-pointer ${!isAvailable ? 'opacity-60 bg-gray-50 cursor-not-allowed' : ''}"
+                    <div data-diet="${dietType}" class="menu-item hidden md:flex bg-white rounded-xl shadow-md overflow-hidden transition-shadow hover:shadow-lg items-center gap-4 p-4 cursor-pointer ${isDisabled ? 'opacity-60 bg-gray-50 cursor-not-allowed' : ''}"
                         data-action="view-item-details" data-item-id="${doc.id}" data-restaurant-id="${restaurantId}">
                         <img src="${itemImage}" class="w-24 h-24 object-cover rounded-lg flex-shrink-0">
                         <div class="flex-grow text-left w-full">
@@ -864,6 +895,7 @@ async function renderCustomerRestaurantView(restaurantId) {
             </div>
 
             <div class="bg-white rounded-xl shadow-md p-6">
+                ${isRestaurantClosed ? `<div class="bg-red-100 text-red-800 p-4 rounded-lg font-bold text-center mb-4">This restaurant is currently closed and not accepting orders.</div>` : ''}
                 <div class="flex items-center">
                     <h2 class="text-3xl md:text-4xl font-bold font-serif">${restaurant.name}</h2>
                     ${callButtonHtml}
@@ -943,6 +975,8 @@ async function renderMenuItemDetailView(itemId, restaurantId) {
     const restaurant = restaurantDoc.data();
     const item = itemDoc.data();
     const isAvailable = item.isAvailable !== false;
+    const isRestaurantClosed = restaurant.isOpen === false;
+    const isDisabled = !isAvailable || isRestaurantClosed;
     const itemImage = item.imageUrl || 'https://placehold.co/600x400?text=Food';
 
     let pricingHtml;
@@ -958,7 +992,7 @@ async function renderMenuItemDetailView(itemId, restaurantId) {
                 </div>
                 <button 
                     data-action="add-to-cart" data-item-id="${itemId}-${v.name}" data-item-name="${item.name} (${v.name})" data-item-price="${v.price}" data-restaurant-id="${restaurantId}" data-restaurant-name="${restaurant.name}" 
-                    class="${buttonClasses}" ${!isAvailable ? 'disabled' : ''}>
+                    class="${buttonClasses}" ${isDisabled ? 'disabled' : ''}>
                     <i data-feather="plus" class="w-5 h-5"></i><span>Add to Cart</span></button>
             </div>`).join('');
     } else {
@@ -967,7 +1001,7 @@ async function renderMenuItemDetailView(itemId, restaurantId) {
                  <p class="font-bold text-2xl text-gray-800">₹${variants[0].price}</p>
                  <button 
                     data-action="add-to-cart" data-item-id="${itemId}" data-item-name="${item.name}" data-item-price="${variants[0].price}" data-restaurant-id="${restaurantId}" data-restaurant-name="${restaurant.name}" 
-                    class="${buttonClasses} py-3 px-6" ${!isAvailable ? 'disabled' : ''}>
+                    class="${buttonClasses} py-3 px-6" ${isDisabled ? 'disabled' : ''}>
                     <i data-feather="plus" class="w-5 h-5"></i><span>Add to Cart</span></button>
             </div>`;
     }
@@ -983,7 +1017,8 @@ async function renderMenuItemDetailView(itemId, restaurantId) {
             </div>
             <div class="flex flex-col h-full">
                 <h2 class="text-3xl font-bold font-serif">${item.name}</h2>
-                ${!isAvailable ? '<p class="text-red-500 font-semibold mt-2">Currently Unavailable</p>' : ''}
+                ${isRestaurantClosed ? '<p class="text-red-500 font-semibold mt-2">Restaurant is currently closed.</p>' : ''}
+                ${!isAvailable && !isRestaurantClosed ? '<p class="text-red-500 font-semibold mt-2">This item is currently unavailable.</p>' : ''}
                 <p class="text-gray-600 mt-2 flex-grow">${item.description || 'No description available.'}</p>
                 <div class="mt-4">
                     ${pricingHtml}
@@ -1037,15 +1072,15 @@ function renderCustomerOrderCard(orderId, orderData) {
     let actionButtons = `<button data-action="view-bill" data-order-id="${orderId}" class="btn btn-primary py-2 px-4">View Bill</button>`;
     
     if (orderData.status === 'delivered' || orderData.status === 'completed') {
-        actionButtons += `<button data-action="reorder" data-order-id="${orderId}" class="btn btn-secondary ml-2 py-2 px-4">Reorder</button>`;
+        actionButtons += `<button data-action="reorder" data-order-id="${orderId}" class="btn btn-secondary py-2 px-4">Reorder</button>`;
     }
     
     if (orderData.status === 'placed') {
-        actionButtons += `<button data-action="cancel-order" data-order-id="${orderId}" class="btn btn-danger ml-2 py-2 px-4">Cancel Order</button>`;
+        actionButtons += `<button data-action="cancel-order" data-order-id="${orderId}" class="btn btn-danger py-2 px-4">Cancel</button>`;
     }
 
     if ((orderData.status === 'delivered' || orderData.status === 'completed') && !orderData.isReviewed) {
-        actionButtons += `<button data-action="rate-order" data-order-id="${orderId}" class="btn bg-gray-200 text-gray-800 ml-2 py-2 px-4">Rate Order</button>`;
+        actionButtons += `<button data-action="rate-order" data-order-id="${orderId}" class="btn bg-gray-200 text-gray-800 py-2 px-4">Rate</button>`;
     }
 
     const itemNames = orderData.items.map(i => i.name).join(' ');
@@ -1070,7 +1105,7 @@ function renderCustomerOrderCard(orderId, orderData) {
                 <p class="font-semibold text-sm mb-1">${currentStatus.text}</p>
                 <div class="w-full bg-gray-200 rounded-full h-2.5"><div class="${currentStatus.color} h-2.5 rounded-full" style="width: ${currentStatus.progress}"></div></div>
             </div>
-            <div class="mt-4 text-right">${actionButtons}</div>
+            <div class="mt-4 flex flex-wrap justify-end gap-2">${actionButtons}</div>
         </div>`;
 }
 
@@ -1522,11 +1557,13 @@ function downloadBillAsPDF(orderId) {
         
 async function showRatingForm(orderId) {
     const order = (await db.collection('orders').doc(orderId).get()).data();
+    const deliveryPersonName = order.deliveryBoyName || (order.deliveryType === 'takeaway' ? 'Restaurant Staff' : 'UniFood Delivery');
+
     const formHtml = `
         <form id="rating-form" class="space-y-6">
             <h3 class="text-2xl font-bold font-serif mb-4">Rate Your Order</h3>
             <div class="p-4 border rounded-lg"><p class="font-semibold">Rate the Restaurant: ${order.restaurantName}</p><div class="rating flex items-center text-3xl" data-type="restaurant">${[...Array(5)].map((_,i)=>`<span class="star" data-value="${i+1}"><i data-feather="star"></i></span>`).join('')}</div><textarea name="restaurantReview" class="input-field w-full mt-2" rows="2" placeholder="Tell us about the food..."></textarea></div>
-            <div class="p-4 border rounded-lg"><p class="font-semibold">Rate the Delivery by: ${order.deliveryBoyName || 'UniFood'}</p><div class="rating flex items-center text-3xl" data-type="delivery">${[...Array(5)].map((_,i)=>`<span class="star" data-value="${i+1}"><i data-feather="star"></i></span>`).join('')}</div><textarea name="deliveryReview" class="input-field w-full mt-2" rows="2" placeholder="How was the delivery experience?"></textarea></div>
+            <div class="p-4 border rounded-lg"><p class="font-semibold">Rate the Service by: ${deliveryPersonName}</p><div class="rating flex items-center text-3xl" data-type="delivery">${[...Array(5)].map((_,i)=>`<span class="star" data-value="${i+1}"><i data-feather="star"></i></span>`).join('')}</div><textarea name="deliveryReview" class="input-field w-full mt-2" rows="2" placeholder="How was the delivery/pickup experience?"></textarea></div>
             <input type="hidden" name="restaurantRating" value="0"><input type="hidden" name="deliveryRating" value="0">
             <div class="flex justify-end gap-4 pt-4"><button type="button" class="btn bg-gray-200" onclick="closeModal()">Skip</button><button type="submit" class="btn btn-primary">Submit Review</button></div>
         </form>`;
@@ -1549,7 +1586,7 @@ async function handlePostReview(e, orderId, orderData) {
     e.preventDefault(); const form = e.target;
     const restaurantRating = parseInt(form.elements.restaurantRating.value);
     const deliveryRating = parseInt(form.elements.deliveryRating.value);
-    if (restaurantRating === 0 || deliveryRating === 0) { showSimpleModal("Rating Required", "Please select a star rating for both."); return; }
+    if (restaurantRating === 0 || deliveryRating === 0) { showSimpleModal("Rating Required", "Please select a star rating for both the restaurant and the service."); return; }
 
     const reviewData = {
         orderId, customerId: currentUser.uid, customerName: currentUser.name,
@@ -1563,16 +1600,27 @@ async function handlePostReview(e, orderId, orderData) {
     await db.collection('orders').doc(orderId).update({ isReviewed: true });
 
     const updateAvgRating = async (collection, docId, newRating) => {
-        if (!docId) return;
+        if (!docId) return; // FIXED: Do not proceed if docId is null or undefined
         const ref = db.collection(collection).doc(docId);
-        db.runTransaction(async (transaction) => {
-            const doc = await transaction.get(ref); const data = doc.data();
-            const newAvg = ((data.avgRating || 0) * (data.ratingCount || 0) + newRating) / ((data.ratingCount || 0) + 1);
-            transaction.update(ref, { avgRating: newAvg, ratingCount: firebase.firestore.FieldValue.increment(1) });
+        return db.runTransaction(async (transaction) => {
+            const doc = await transaction.get(ref);
+            if (!doc.exists) return;
+            const data = doc.data();
+            const currentRating = data.avgRating || 0;
+            const ratingCount = data.ratingCount || 0;
+            const newAvg = (currentRating * ratingCount + newRating) / (ratingCount + 1);
+            transaction.update(ref, { 
+                avgRating: newAvg, 
+                ratingCount: firebase.firestore.FieldValue.increment(1) 
+            });
         });
     };
+    
     await updateAvgRating('restaurants', orderData.restaurantId, restaurantRating);
-    await updateAvgRating('users', orderData.deliveryBoyId, deliveryRating);
+    // FIXED: Only update delivery boy rating if one was assigned
+    if (orderData.deliveryBoyId) {
+        await updateAvgRating('users', orderData.deliveryBoyId, deliveryRating);
+    }
     
     await logAudit("Review Submitted", `Order ID: ${orderId}`);
     showSimpleModal("Thank You!", "Your review has been submitted."); closeModal();
@@ -1675,4 +1723,3 @@ function getAiResponse(message) {
 }
 
 feather.replace();
-
