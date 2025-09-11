@@ -115,31 +115,23 @@ async function initializeApp() {
     });
 }
 
-// DEBUG: Added detailed logging to the notification listener
 function listenForOrderStatusUpdates() {
     if (!currentUser) return;
-    console.log(`[DEBUG] Attaching order listener for customer: ${currentUser.uid}`);
 
     const query = db.collection('orders').where('customerId', '==', currentUser.uid);
 
     const unsub = query.onSnapshot(snapshot => {
-        console.log(`[DEBUG] Order listener fired. Found ${snapshot.docChanges().length} change(s).`);
         snapshot.docChanges().forEach(change => {
-            console.log(`[DEBUG] Change Type: ${change.type}, Order ID: ${change.doc.id}`);
             if (change.type === 'modified') {
                 const orderData = change.doc.data();
-                console.log('[DEBUG] Checking modified order:', orderData);
                 if (orderData.status === 'ready-for-pickup' && orderData.deliveryType === 'takeaway') {
-                    console.log('[SUCCESS] Conditions MET for notification!');
-                    customerNotificationSound.play().catch(e => console.error("[ERROR] Customer notification sound failed:", e));
-                    showToast(`Order from ${orderData.restaurantName} is ready for pickup!`, 'info');
-                } else {
-                    console.log('[INFO] Conditions for notification NOT MET.');
+                    customerNotificationSound.play().catch(e => console.error("Customer notification sound failed:", e));
+                    showToast(`Your order from ${orderData.restaurantName} is ready for pickup!`, 'info');
                 }
             }
         });
     }, error => {
-        console.error("[ERROR] Order listener failed:", error);
+        console.error("Order listener failed:", error);
     });
     unsubscribeListeners.push(unsub);
 }
@@ -1331,7 +1323,6 @@ async function renderCartView() {
             deliveryAddressContainer.classList.remove('hidden');
             document.getElementById('delivery-address').required = true;
             newTotal += deliveryFee;
-            // MODIFIED: Show standard payment options for delivery
             paymentContainer.innerHTML = `
                 <div class="flex gap-x-6">
                     <label class="flex items-center">
@@ -1347,7 +1338,6 @@ async function renderCartView() {
             deliveryFeeLine.classList.add('hidden');
             deliveryAddressContainer.classList.add('hidden');
             document.getElementById('delivery-address').required = false;
-             // MODIFIED: Show only counter payment for takeaway
             paymentContainer.innerHTML = `
                 <div class="p-2 bg-gray-100 rounded-md text-gray-700">
                     <p class="font-semibold">Cash/Online at Counter</p>
@@ -1591,42 +1581,41 @@ async function showRatingForm(orderId) {
     document.getElementById('rating-form').addEventListener('submit', e => handlePostReview(e, orderId, order));
 }
 
-// DEBUG: Added detailed logging to the review function
 async function handlePostReview(e, orderId, orderData) {
-    e.preventDefault(); 
-    console.log("[DEBUG] handlePostReview started for order:", orderId);
+    e.preventDefault();
     const form = e.target;
     const restaurantRating = parseInt(form.elements.restaurantRating.value);
     const deliveryRating = parseInt(form.elements.deliveryRating.value);
-
-    if (restaurantRating === 0 || deliveryRating === 0) { 
-        showSimpleModal("Rating Required", "Please select a star rating for both the restaurant and the service."); 
-        return; 
+    if (restaurantRating === 0 || deliveryRating === 0) {
+        showSimpleModal("Rating Required", "Please select a star rating for both the restaurant and the service.");
+        return;
     }
 
     const reviewData = {
-        orderId, customerId: currentUser.uid, customerName: currentUser.name,
-        restaurantId: orderData.restaurantId, restaurantName: orderData.restaurantName,
-        deliveryBoyId: orderData.deliveryBoyId, deliveryBoyName: orderData.deliveryBoyName,
-        restaurantRating, restaurantReview: form.elements.restaurantReview.value,
-        deliveryRating, deliveryReview: form.elements.deliveryReview.value,
+        orderId,
+        customerId: currentUser.uid,
+        customerName: currentUser.name,
+        restaurantId: orderData.restaurantId,
+        restaurantName: orderData.restaurantName,
+        deliveryBoyId: orderData.deliveryBoyId || null, // FIXED: Use null instead of undefined
+        deliveryBoyName: orderData.deliveryBoyName || null, // FIXED: Use null instead of undefined
+        restaurantRating,
+        restaurantReview: form.elements.restaurantReview.value,
+        deliveryRating,
+        deliveryReview: form.elements.deliveryReview.value,
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
     };
-    console.log("[DEBUG] Review data prepared:", reviewData);
+    
+    try {
+        await db.collection('reviews').add(reviewData);
+        await db.collection('orders').doc(orderId).update({ isReviewed: true });
 
-    const updateAvgRating = async (collection, docId, newRating) => {
-        if (!docId) {
-            console.log(`[DEBUG] Skipping rating update for ${collection} as docId is null.`);
-            return;
-        }
-        const ref = db.collection(collection).doc(docId);
-        try {
-            await db.runTransaction(async (transaction) => {
+        const updateAvgRating = async (collection, docId, newRating) => {
+            if (!docId) return;
+            const ref = db.collection(collection).doc(docId);
+            return db.runTransaction(async (transaction) => {
                 const doc = await transaction.get(ref);
-                if (!doc.exists) {
-                    console.warn(`[WARN] Document ${docId} in ${collection} not found. Cannot update rating.`);
-                    return;
-                }
+                if (!doc.exists) return;
                 const data = doc.data();
                 const currentRating = data.avgRating || 0;
                 const ratingCount = data.ratingCount || 0;
@@ -1636,29 +1625,15 @@ async function handlePostReview(e, orderId, orderData) {
                     ratingCount: firebase.firestore.FieldValue.increment(1) 
                 });
             });
-            console.log(`[SUCCESS] Updated average rating for ${collection}/${docId}`);
-        } catch (error) {
-            console.error(`[ERROR] Failed to update average rating for ${collection}/${docId}:`, error);
-        }
-    };
-    
-    try {
-        console.log("[DEBUG] Adding review to database...");
-        await db.collection('reviews').add(reviewData);
-        console.log("[SUCCESS] Review added.");
-
-        console.log("[DEBUG] Updating order isReviewed status...");
-        await db.collection('orders').doc(orderId).update({ isReviewed: true });
-        console.log("[SUCCESS] Order status updated.");
-
-        console.log("[DEBUG] Updating restaurant average rating...");
+        };
+        
         await updateAvgRating('restaurants', orderData.restaurantId, restaurantRating);
-
-        console.log("[DEBUG] Updating delivery person average rating...");
-        await updateAvgRating('users', orderData.deliveryBoyId, deliveryRating);
+        if (orderData.deliveryBoyId) {
+            await updateAvgRating('users', orderData.deliveryBoyId, deliveryRating);
+        }
         
         await logAudit("Review Submitted", `Order ID: ${orderId}`);
-        showSimpleModal("Thank You!", "Your review has been submitted."); 
+        showSimpleModal("Thank You!", "Your review has been submitted.");
         closeModal();
     } catch (error) {
         console.error("[FATAL] Error during post-review process:", error);
