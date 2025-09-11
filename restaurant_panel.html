@@ -60,6 +60,17 @@
         .modal-overlay.active .modal-content { transform: scale(1); }
         
         #mobile-menu-overlay { transition: opacity 0.3s ease-in-out; }
+
+        @keyframes slideInUp {
+            from { transform: translateY(100%); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        @keyframes fadeOut {
+            from { opacity: 1; }
+            to { opacity: 0; }
+        }
+        .toast-enter { animation: slideInUp 0.5s ease-out forwards; }
+        .toast-exit { animation: fadeOut 0.5s ease-in forwards; }
     </style>
     <script src="restaurant_panel.js" defer></script>
 </head>
@@ -133,5 +144,7 @@
     </template>
 
     <div id="modal-container" class="modal-overlay"></div>
+    <div id="toast-container" class="fixed bottom-5 right-5 z-[9999] space-y-2"></div>
+
 </body>
 </html>
