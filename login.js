@@ -228,7 +228,7 @@ async function redirectUser(userId) {
                 break;
             case 'customer':
             default:
-                window.location.href = 'customer_Panel.html';
+                window.location.href = 'customer_panel.html';
                 break;
         }
     } else {
