@@ -1702,39 +1702,6 @@ const handleLogout = () => {
 logoutBtn.addEventListener('click', handleLogout);
 mobileLogoutBtn.addEventListener('click', handleLogout);
 
-// --- AI CHATBOT SCRIPT ---
-const chatbotToggle = document.getElementById('chatbot-toggle');
-const chatbotWindow = document.getElementById('chatbot-window');
-const chatbotInput = document.getElementById('chatbot-input');
-const chatbotMessages = document.getElementById('chatbot-messages');
 
-chatbotToggle.addEventListener('click', () => chatbotWindow.classList.toggle('hidden'));
-chatbotInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter' && e.target.value.trim() !== '') {
-        const userMessage = e.target.value.trim();
-        appendMessage(userMessage, 'user');
-        e.target.value = '';
-        getAiResponse(userMessage);
-    }
-});
-
-function appendMessage(text, sender) {
-    const messageDiv = document.createElement('div');
-    messageDiv.className = `text-sm p-2 rounded-lg mb-2 ${sender === 'user' ? 'bg-blue-500 text-white ml-auto' : 'bg-gray-100'}`;
-    messageDiv.style.maxWidth = '80%';
-    messageDiv.textContent = text;
-    chatbotMessages.appendChild(messageDiv);
-    chatbotMessages.scrollTop = chatbotMessages.scrollHeight;
-}
-
-function getAiResponse(message) {
-    const lowerCaseMessage = message.toLowerCase();
-    let response = "I'm not sure how to answer that. Try asking about orders, restaurants, or your profile.";
-    if (lowerCaseMessage.includes("track my order")) response = "Sure! Can you please provide the order ID?";
-    else if (lowerCaseMessage.includes("help")) response = `I can help with tracking orders, finding restaurants, and answering questions about your account. What do you need assistance with?`;
-    else if (lowerCaseMessage.includes("best restaurants")) response = "Based on your recent orders, I recommend trying 'The Pizza Palace' or 'Curry Kingdom'.";
-    else if (lowerCaseMessage.includes("how to add menu item") && currentUser?.role === 'restaurant') response = "Go to 'Menu Management' in your portal and click the 'Add Item' button. I can guide you through the steps if you'd like!";
-    setTimeout(() => { appendMessage(response, 'ai'); }, 500);
-}
 
 feather.replace();
