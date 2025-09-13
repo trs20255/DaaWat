@@ -146,5 +146,60 @@
     <div id="modal-container" class="modal-overlay"></div>
     <div id="toast-container" class="fixed bottom-5 right-5 z-[9999] space-y-2"></div>
 
+
+  
+  <script src='https://www.noupe.com/embed/01993c59b14b7cd0b27bea3f70d027c2ee97.js'></script>
+
+<script>
+    // This script will create your custom button and control the chatbot above.
+    (function() {
+        // 1. Create your custom button element
+        const customButton = document.createElement('button');
+        customButton.style.position = 'fixed';
+        customButton.style.bottom = '69px';
+        customButton.style.left = '20px';
+        customButton.style.zIndex = '9999';
+        customButton.style.padding = '16px';
+        customButton.style.borderRadius = '50%';
+        customButton.style.backgroundColor = '#1a202c'; // Using your primary color
+        customButton.style.color = 'white';
+        customButton.style.boxShadow = '0 4px 15px rgba(0,0,0,0.2)';
+        customButton.style.border = 'none';
+        customButton.style.cursor = 'pointer';
+        customButton.style.transition = 'transform 0.2s ease';
+        customButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>';
+        
+        // Add the button to the page
+        document.body.appendChild(customButton);
+
+        let defaultNoupeButton = null;
+
+        // 2. This function finds the original button, hides it, and connects it to your new button
+        function setupChatRelay() {
+            // UPDATED: Using a more flexible selector to find the default button
+            defaultNoupeButton = document.querySelector('[class*="noupe-chat-button"]');
+            
+            if (defaultNoupeButton) {
+                // Hide the original button
+                defaultNoupeButton.style.display = 'none';
+                defaultNoupeButton.style.visibility = 'hidden';
+
+                // Tell your custom button what to do when clicked
+                customButton.addEventListener('click', () => {
+                    // This simulates a click on the original (now hidden) button
+                    defaultNoupeButton.click();
+                });
+
+                // Stop searching once we've found it
+                clearInterval(findButtonInterval);
+            }
+        }
+
+        // 3. Keep searching for the default button until the script has loaded it
+        const findButtonInterval = setInterval(setupChatRelay, 500);
+
+    })();
+</script>
+
 </body>
 </html>
