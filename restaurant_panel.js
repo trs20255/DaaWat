@@ -13,12 +13,15 @@ firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
 
+// --- IMAGE UPLOAD CONFIGURATION ---
+const IMGBB_API_KEY = "62a280e0202a328a0b3663fe3b7c6104"; // IMPORTANT: Replace with your actual ImgBB API key
+
 // --- GLOBAL STATE & EVENT HANDLERS ---
 let currentUser = null;
 let unsubscribeListeners = [];
 let activePortalHandler = null;
 let siteSettings = {};
-// CORRECTED: Using a more reliable sound file source
+let charts = {}; // To hold Chart.js instances
 const notificationSound = new Audio('https://cdn.jsdelivr.net/npm/ion-sound@3.0.7/sounds/bell_ring.mp3');
 
 
@@ -38,6 +41,57 @@ const mobileMenu = document.getElementById('mobile-menu');
 const closeMobileMenuButton = document.getElementById('close-mobile-menu');
 const mobileUserInfo = document.getElementById('mobile-user-info');
 const mobileLogoutBtn = document.getElementById('mobile-logout-btn');
+
+// --- IMAGE UPLOAD UTILITY ---
+async function uploadImageToImgBB(file) {
+    if (!IMGBB_API_KEY || IMGBB_API_KEY === "YOUR_IMGBB_API_KEY") {
+        showToast("ImgBB API key is not configured.", "error");
+        throw new Error("ImgBB API key is missing.");
+    }
+    const formData = new FormData();
+    formData.append("image", file);
+
+    try {
+        const response = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, {
+            method: "POST",
+            body: formData,
+        });
+        const data = await response.json();
+        if (data.success) {
+            return data.data.url;
+        } else {
+            throw new Error(data.error.message || "Image upload failed.");
+        }
+    } catch (error) {
+        console.error("ImgBB Upload Error:", error);
+        throw error;
+    }
+}
+
+function handleImageUpload(e, urlInput, loader) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    loader.style.display = 'block';
+    
+    uploadImageToImgBB(file)
+        .then(url => {
+            if (urlInput.tagName.toLowerCase() === 'textarea') {
+                urlInput.value = (urlInput.value ? urlInput.value + '\n' : '') + url;
+            } else {
+                urlInput.value = url;
+            }
+            urlInput.dispatchEvent(new Event('input')); 
+            showToast("Image uploaded successfully!", "success");
+        })
+        .catch(err => {
+            showToast(`Upload failed: ${err.message}`, "error");
+        })
+        .finally(() => {
+            loader.style.display = 'none';
+            e.target.value = ''; 
+        });
+}
 
 // --- CORE APP & AUTH LOGIC ---
 async function initializeApp() {
@@ -210,6 +264,13 @@ function handleRestaurantClicks(e) {
             case 'change-status': changeOrderStatus(orderId, newStatus); break;
             case 'mark-as-paid': markPaymentAsPaid(orderId); break;
             case 'download-report': downloadOrderReport(); break;
+            case 'change-password':
+                 showConfirmationModal('Change Password?', 'A password reset link will be sent to your email.', () => {
+                    auth.sendPasswordResetEmail(currentUser.email)
+                        .then(() => showSimpleModal('Email Sent', 'Password reset email sent.'))
+                        .catch(err => showSimpleModal('Error', err.message));
+                });
+                break;
         }
     }
 }
@@ -230,23 +291,117 @@ function renderRestaurantView(viewName) {
     }
 }
 
+// --- NEW: Dashboard Analytics & Charts ---
+
+function destroyCharts() {
+    Object.values(charts).forEach(chart => {
+        if (chart) chart.destroy();
+    });
+    charts = {};
+}
+
 async function renderRestaurantDashboard(contentArea) {
-    contentArea.innerHTML = `<h2 class="text-3xl font-bold font-serif mb-6">Dashboard</h2><p>Loading stats...</p>`;
-    const restaurantId = currentUser.restaurantId;
-    const ordersSnapshot = await db.collection('orders').where('restaurantId', '==', restaurantId).get();
-    const orders = ordersSnapshot.docs.map(doc => doc.data());
-    const totalRevenue = orders.reduce((sum, order) => sum + order.totalPrice, 0);
-    const restaurantDoc = await db.collection('restaurants').doc(restaurantId).get();
-    const avgRating = restaurantDoc.exists ? restaurantDoc.data().avgRating || 0 : 0;
+    destroyCharts(); // Clear previous charts
     contentArea.innerHTML = `
         <h2 class="text-3xl font-bold font-serif mb-6">Dashboard</h2>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-            <div class="bg-white p-6 rounded-xl shadow-md text-center"><h4 class="text-lg font-semibold text-gray-500">Total Orders</h4><p class="text-4xl font-bold mt-2">${orders.length}</p></div>
-            <div class="bg-white p-6 rounded-xl shadow-md text-center"><h4 class="text-lg font-semibold text-gray-500">Total Revenue</h4><p class="text-4xl font-bold mt-2">₹${totalRevenue.toFixed(2)}</p></div>
-            <div class="bg-white p-6 rounded-xl shadow-md text-center"><h4 class="text-lg font-semibold text-gray-500">Average Rating</h4><p class="text-4xl font-bold mt-2 flex items-center justify-center gap-2"><i data-feather="star" class="w-8 h-8 fill-current text-yellow-500"></i>${avgRating.toFixed(1)}</p></div>
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div class="skeleton h-28"></div>
+            <div class="skeleton h-28"></div>
+            <div class="skeleton h-28"></div>
+            <div class="skeleton h-28"></div>
+            <div class="skeleton h-72 col-span-2 lg:col-span-4"></div>
+            <div class="skeleton h-72 col-span-2 lg:col-span-4"></div>
         </div>`;
-    feather.replace();
+
+    const restaurantId = currentUser.restaurantId;
+    const ordersSnapshot = await db.collection('orders')
+                                   .where('restaurantId', '==', restaurantId)
+                                   .where('status', 'in', ['delivered', 'completed'])
+                                   .get();
+    
+    const orders = ordersSnapshot.docs.map(doc => doc.data());
+
+    // --- Calculate KPIs ---
+    const totalRevenue = orders.reduce((sum, order) => sum + order.totalPrice, 0);
+    const totalOrders = orders.length;
+    const avgOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todaysOrders = orders.filter(order => order.createdAt.toDate() >= today);
+    const revenueToday = todaysOrders.reduce((sum, order) => sum + order.totalPrice, 0);
+
+    // --- Process Data for Charts ---
+    // Daily Sales (Last 7 Days)
+    const salesData = { labels: [], datasets: [{ label: 'Daily Revenue', data: [], backgroundColor: 'rgba(212, 175, 55, 0.6)', borderColor: 'rgba(212, 175, 55, 1)', borderWidth: 1 }] };
+    for (let i = 6; i >= 0; i--) {
+        const date = new Date();
+        date.setDate(date.getDate() - i);
+        const dayString = date.toLocaleDateString('en-US', { weekday: 'short' });
+        salesData.labels.push(dayString);
+
+        const startOfDay = new Date(date);
+        startOfDay.setHours(0,0,0,0);
+        const endOfDay = new Date(date);
+        endOfDay.setHours(23,59,59,999);
+
+        const dailyRevenue = orders
+            .filter(o => o.createdAt.toDate() >= startOfDay && o.createdAt.toDate() <= endOfDay)
+            .reduce((sum, o) => sum + o.totalPrice, 0);
+        salesData.datasets[0].data.push(dailyRevenue);
+    }
+    
+    // Top Selling Items
+    const itemCounts = {};
+    orders.forEach(order => {
+        order.items.forEach(item => {
+            itemCounts[item.name] = (itemCounts[item.name] || 0) + item.quantity;
+        });
+    });
+    const sortedItems = Object.entries(itemCounts).sort(([,a],[,b]) => b-a).slice(0, 5);
+    const topItemsData = {
+        labels: sortedItems.map(item => item[0]),
+        datasets: [{
+            label: 'Quantity Sold',
+            data: sortedItems.map(item => item[1]),
+            backgroundColor: ['#D4AF37', '#1a202c', '#6c757d', '#f8f9fa', '#343a40'],
+            hoverOffset: 4
+        }]
+    };
+    
+    // --- Render HTML ---
+    contentArea.innerHTML = `
+        <h2 class="text-3xl font-bold font-serif mb-6">Dashboard</h2>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6 mb-6">
+            <div class="bg-white p-4 rounded-xl shadow-md"><h4 class="text-sm font-semibold text-gray-500">Total Revenue</h4><p class="text-2xl font-bold mt-2">₹${totalRevenue.toFixed(2)}</p></div>
+            <div class="bg-white p-4 rounded-xl shadow-md"><h4 class="text-sm font-semibold text-gray-500">Total Orders</h4><p class="text-2xl font-bold mt-2">${totalOrders}</p></div>
+            <div class="bg-white p-4 rounded-xl shadow-md"><h4 class="text-sm font-semibold text-gray-500">Revenue Today</h4><p class="text-2xl font-bold mt-2">₹${revenueToday.toFixed(2)}</p></div>
+            <div class="bg-white p-4 rounded-xl shadow-md"><h4 class="text-sm font-semibold text-gray-500">Avg. Order Value</h4><p class="text-2xl font-bold mt-2">₹${avgOrderValue.toFixed(2)}</p></div>
+        </div>
+        <div class="grid grid-cols-1 lg:grid-cols-5 gap-6">
+            <div class="lg:col-span-3 bg-white p-4 rounded-xl shadow-md">
+                <h3 class="font-bold mb-4">Last 7 Days Revenue</h3>
+                <canvas id="daily-sales-chart"></canvas>
+            </div>
+            <div class="lg:col-span-2 bg-white p-4 rounded-xl shadow-md">
+                <h3 class="font-bold mb-4">Top Selling Items</h3>
+                <canvas id="top-items-chart"></canvas>
+            </div>
+        </div>
+        `;
+
+    // --- Initialize Charts ---
+    const salesCtx = document.getElementById('daily-sales-chart')?.getContext('2d');
+    if (salesCtx) {
+        charts.dailySales = new Chart(salesCtx, { type: 'bar', data: salesData, options: { responsive: true } });
+    }
+
+    const itemsCtx = document.getElementById('top-items-chart')?.getContext('2d');
+    if (itemsCtx) {
+        charts.topItems = new Chart(itemsCtx, { type: 'pie', data: topItemsData, options: { responsive: true } });
+    }
 }
+
 
 async function renderRestaurantOrders(contentArea) {
     contentArea.innerHTML = `
@@ -315,6 +470,7 @@ async function renderRestaurantOrders(contentArea) {
 }
 
 function loadOrdersByStatus(status) {
+    destroyCharts();
     const restaurantId = currentUser.restaurantId;
     const listEl = document.getElementById('restaurant-orders-list');
     
@@ -433,7 +589,6 @@ async function denyOrder(orderId) {
     });
 }
 
-// CORRECTED: Rewritten for stability
 async function downloadOrderReport() {
     const typeSelect = document.getElementById('report-type');
     if (!typeSelect) {
@@ -545,12 +700,13 @@ async function downloadOrderReport() {
 
 
 async function renderRestaurantMenu(contentArea) {
+    destroyCharts();
     contentArea.innerHTML = `
         <div class="flex justify-between items-center mb-6">
             <h2 class="text-3xl font-bold font-serif">Menu Management</h2>
             <button data-action="add-menu-item" class="btn btn-primary rounded-lg py-2 px-4 flex items-center gap-2"><i data-feather="plus"></i>Add Item</button>
         </div>
-        <div id="restaurant-menu-list" class="space-y-3"></div>`;
+        <div id="restaurant-menu-list" class="space-y-4"></div>`;
     feather.replace();
     const listEl = document.getElementById('restaurant-menu-list');
     const unsub = db.collection('restaurants').doc(currentUser.restaurantId).collection('menu').onSnapshot(snapshot => {
@@ -574,21 +730,28 @@ function renderMenuItemCard(doc) {
     const variants = item.variants && item.variants.length > 0 ? item.variants : [{ name: '', price: item.price }];
     
     return `
-        <div class="flex items-center justify-between p-4 border rounded-lg bg-white">
-            <img src="${item.imageUrl || 'https://placehold.co/100x100?text=Food'}" class="w-20 h-20 object-cover rounded-md mr-4 flex-shrink-0">
+        <div class="bg-white p-4 border rounded-lg flex flex-col md:flex-row md:items-center gap-4">
+            <img src="${item.imageUrl || 'https://placehold.co/100x100?text=Food'}" class="w-full md:w-24 h-40 md:h-24 object-cover rounded-md flex-shrink-0" onerror="this.src='https://placehold.co/100x100?text=Error'">
+            
             <div class="flex-grow">
-                <p class="font-semibold">${item.name}</p>
-                <p class="text-sm text-gray-600">${item.description || 'No description.'}</p>
-                <div class="mt-1 text-sm">${variants.map(v => `<span class="inline-block bg-gray-100 rounded-full px-2 py-1 text-xs font-semibold mr-1 mb-1">${v.name ? `${v.name}: ` : ''}₹${v.price}</span>`).join('')}</div>
-            </div>
-            <div class="flex items-center flex-col sm:flex-row gap-4">
-                <div class="flex items-center gap-2">
-                    <span class="text-sm font-medium ${isAvailable ? 'text-green-600' : 'text-gray-500'}">${isAvailable ? 'Available' : 'Unavailable'}</span>
-                    <label class="relative inline-flex items-center cursor-pointer"><input type="checkbox" onchange="toggleItemAvailability('${doc.id}', this.checked)" class="sr-only peer" ${isAvailable ? 'checked' : ''}><div class="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div></label>
+                <p class="font-semibold text-lg">${item.name}</p>
+                <p class="text-sm text-gray-600 mt-1">${item.description || 'No description.'}</p>
+                <div class="mt-2 text-sm">
+                    ${variants.map(v => `<span class="inline-block bg-gray-100 rounded-full px-2 py-1 text-xs font-semibold mr-1 mb-1">${v.name ? `${v.name}: ` : ''}₹${v.price}</span>`).join('')}
                 </div>
-                <div class="flex gap-2">
-                    <button data-action="edit-menu-item" data-item-id="${doc.id}" class="btn bg-gray-200 p-2"><i data-feather="edit-2" class="w-4 h-4"></i></button>
-                    <button data-action="delete-menu-item" data-item-id="${doc.id}" class="btn bg-red-100 text-red-600 p-2"><i data-feather="trash" class="w-4 h-4"></i></button>
+            </div>
+
+            <div class="border-t md:border-t-0 md:border-l pt-4 md:pt-0 md:pl-4 flex flex-col justify-center items-stretch md:items-end gap-3 flex-shrink-0">
+                <div class="flex items-center justify-between md:justify-end gap-2 w-full">
+                    <span class="text-sm font-medium ${isAvailable ? 'text-green-600' : 'text-gray-500'}">${isAvailable ? 'Available' : 'Unavailable'}</span>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" onchange="toggleItemAvailability('${doc.id}', this.checked)" class="sr-only peer" ${isAvailable ? 'checked' : ''}>
+                        <div class="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
+                    </label>
+                </div>
+                <div class="flex gap-2 w-full">
+                    <button data-action="edit-menu-item" data-item-id="${doc.id}" class="btn bg-gray-200 p-2 flex-1 md:flex-none"><i data-feather="edit-2" class="w-4 h-4"></i></button>
+                    <button data-action="delete-menu-item" data-item-id="${doc.id}" class="btn bg-red-100 text-red-600 p-2 flex-1 md:flex-none"><i data-feather="trash" class="w-4 h-4"></i></button>
                 </div>
             </div>
         </div>`;
@@ -596,44 +759,179 @@ function renderMenuItemCard(doc) {
 
 async function showMenuItemForm(itemId = null) {
     const isEditing = itemId !== null;
-    let item = { name: '', description: '', imageUrl: '', variants: [{ name: '', price: '' }] };
+    const restaurantId = currentUser.restaurantId;
+    let item = { name: '', description: '', imageUrl: '', category: '', isVeg: false, variants: [{ name: '', price: '' }] };
+
     if (isEditing) {
-        const itemDoc = await db.collection('restaurants').doc(currentUser.restaurantId).collection('menu').doc(itemId).get();
+        const itemDoc = await db.collection('restaurants').doc(restaurantId).collection('menu').doc(itemId).get();
         if (itemDoc.exists) {
             const data = itemDoc.data();
             item = { ...data, variants: data.variants && data.variants.length > 0 ? data.variants : [{ name: '', price: data.price || '' }] };
         }
     }
+
+    const categoriesSnapshot = await db.collection('menuCategories').orderBy('name').get();
+    const categoryOptions = categoriesSnapshot.docs.map(doc => {
+        const categoryName = doc.data().name;
+        const isSelected = item.category === categoryName ? 'selected' : '';
+        return `<option value="${categoryName}" ${isSelected}>${categoryName}</option>`;
+    }).join('');
+
     const formHtml = `
         <form id="menu-item-form" class="space-y-4">
-            <h3 class="text-2xl font-bold font-serif mb-4">${isEditing ? 'Edit Menu Item' : 'Add New Menu Item'}</h3><input type="hidden" name="itemId" value="${itemId || ''}"><input type="text" name="name" class="input-field w-full" placeholder="Item Name" value="${item.name}" required><textarea name="description" class="input-field w-full" rows="2" placeholder="Description">${item.description || ''}</textarea><input type="url" name="imageUrl" class="input-field w-full" placeholder="Image URL" value="${item.imageUrl || ''}">
-            <div class="border-t pt-4 mt-4"><h4 class="font-semibold mb-2">Pricing Variants</h4><div id="variants-container" class="space-y-2">${item.variants.map((v, index) => `<div class="variant-row flex items-center gap-2"><input type="text" class="input-field flex-grow" placeholder="Variant Name (e.g., Half)" value="${v.name || ''}" required><input type="number" class="input-field w-28" placeholder="Price" value="${v.price || ''}" step="0.01" required><button type="button" class="btn btn-danger p-2 remove-variant-btn" ${index === 0 ? 'disabled' : ''}>&times;</button></div>`).join('')}</div><button type="button" id="add-variant-btn" class="btn btn-secondary text-sm mt-2 py-1 px-3">Add Variant</button></div>
-            <div class="flex justify-end gap-4 pt-4"><button type="button" class="btn bg-gray-200" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Save Item</button></div>
-        </form>`;
+            <h3 class="text-2xl font-bold font-serif mb-4">${isEditing ? 'Edit Menu Item' : 'Add New Menu Item'}</h3>
+            <input type="hidden" name="itemId" value="${itemId || ''}">
+            <input type="text" name="name" class="input-field w-full" placeholder="Item Name (e.g., Biryani)" value="${item.name}" required>
+            
+            <div>
+                <label class="block text-sm font-medium">Category</label>
+                <select name="category" class="input-field w-full" required>
+                    <option value="">-- Select a Category --</option>
+                    ${categoryOptions}
+                    <option value="add_new" class="font-bold text-blue-600">-- Add New Category --</option>
+                </select>
+            </div>
+            <div id="new-category-container" class="hidden pl-4 border-l-2 border-blue-500">
+                <label class="block text-sm font-medium">New Category Name</label>
+                <input type="text" name="newCategoryName" class="input-field w-full" placeholder="e.g., Desserts">
+            </div>
+
+            <textarea name="description" class="input-field w-full" rows="2" placeholder="Description">${item.description || ''}</textarea>
+            
+            <div class="flex items-center">
+                <input type="checkbox" id="is-veg-checkbox" name="isVeg" class="h-4 w-4 rounded border-gray-300 text-green-600 focus:ring-green-500" ${item.isVeg ? 'checked' : ''}>
+                <label for="is-veg-checkbox" class="ml-2 block text-sm text-gray-900">This item is Vegetarian</label>
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium mb-2">Item Image</label>
+                <input type="file" id="menu-image-uploader" accept="image/*" class="hidden">
+                <button type="button" class="btn bg-gray-100 text-gray-800 font-semibold py-3 px-4 rounded-lg flex items-center gap-2 w-full justify-center border-2 border-dashed hover:bg-gray-200" onclick="document.getElementById('menu-image-uploader').click();">
+                    <i data-feather="upload-cloud" class="w-5 h-5"></i> 
+                    <span>Upload from Device</span>
+                </button>
+                <div class="upload-loader text-sm text-center py-2" style="display:none;">
+                    <div class="inline-block animate-spin rounded-full h-5 w-5 border-b-2 border-gray-900"></div>
+                    <span>Uploading...</span>
+                </div>
+                <div class="relative flex items-center my-2">
+                    <div class="flex-grow border-t border-gray-300"></div><span class="flex-shrink mx-4 text-gray-400 text-xs">OR</span><div class="flex-grow border-t border-gray-300"></div>
+                </div>
+                <input type="url" name="imageUrl" class="input-field w-full" placeholder="Paste image URL here" value="${item.imageUrl || ''}">
+                <img id="menu-image-preview" src="${item.imageUrl || 'https://placehold.co/100x100?text=Preview'}" class="mt-2 w-24 h-24 object-cover rounded-md border" onerror="this.src='https://placehold.co/100x100?text=Invalid'"/>
+            </div>
+            <div class="border-t pt-4 mt-4">
+                <h4 class="font-semibold mb-2">Pricing</h4>
+                <div id="variants-container" class="space-y-2">
+                    ${item.variants.map((v, index) => `
+                        <div class="variant-row flex items-center gap-2">
+                            <input type="text" class="input-field flex-grow" placeholder="Variant Name (e.g., Half) - Optional" value="${v.name || ''}">
+                            <input type="number" class="input-field w-28" placeholder="Price" value="${v.price || ''}" step="0.01" required>
+                            <button type="button" class="btn btn-danger p-2 remove-variant-btn" ${index === 0 ? 'disabled' : ''}>&times;</button>
+                        </div>
+                    `).join('')}
+                </div>
+                <button type="button" id="add-variant-btn" class="btn btn-secondary text-base mt-2 py-2 px-4">Add Variant</button>
+            </div>
+            <div class="flex justify-end gap-4 pt-4">
+                <button type="button" class="btn bg-gray-200 text-lg py-3 px-6" onclick="closeModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary text-lg py-3 px-6">Save Item</button>
+            </div>
+        </form>
+    `;
     showModal(formHtml);
+    feather.replace();
+
+    const form = document.getElementById('menu-item-form');
+    const uploader = document.getElementById('menu-image-uploader');
+    const urlInput = form.elements.imageUrl;
+    const loader = form.querySelector('.upload-loader');
+    
+    uploader.addEventListener('change', (e) => handleImageUpload(e, urlInput, loader));
+
+    const categorySelect = form.querySelector('select[name="category"]');
+    const newCategoryContainer = document.getElementById('new-category-container');
+    const newCategoryInput = form.querySelector('input[name="newCategoryName"]');
+
+    categorySelect.addEventListener('change', (e) => {
+        if (e.target.value === 'add_new') {
+            newCategoryContainer.classList.remove('hidden');
+            newCategoryInput.required = true;
+        } else {
+            newCategoryContainer.classList.add('hidden');
+            newCategoryInput.required = false;
+        }
+    });
+
+    urlInput.addEventListener('input', (e) => {
+        document.getElementById('menu-image-preview').src = e.target.value || 'https://placehold.co/100x100?text=Preview';
+    });
+    
     const variantsContainer = document.getElementById('variants-container');
     document.getElementById('add-variant-btn').addEventListener('click', () => {
         const row = document.createElement('div');
         row.className = 'variant-row flex items-center gap-2';
-        row.innerHTML = `<input type="text" class="input-field flex-grow" placeholder="Variant Name" required><input type="number" class="input-field w-28" placeholder="Price" step="0.01" required><button type="button" class="btn btn-danger p-2 remove-variant-btn">&times;</button>`;
+        row.innerHTML = `<input type="text" class="input-field flex-grow" placeholder="Variant Name (e.g., Full) - Optional"><input type="number" class="input-field w-28" placeholder="Price" step="0.01" required><button type="button" class="btn btn-danger p-2 remove-variant-btn">&times;</button>`;
         variantsContainer.appendChild(row);
     });
-    variantsContainer.addEventListener('click', e => { if (e.target.classList.contains('remove-variant-btn')) e.target.closest('.variant-row').remove(); });
-    document.getElementById('menu-item-form').addEventListener('submit', async e => {
-        e.preventDefault();
-        const form = e.target, variants = []; let validationPassed = true;
-        form.querySelectorAll('.variant-row').forEach(row => {
-            const nameInput = row.children[0], priceInput = row.children[1];
-            if(!nameInput.value.trim() || !priceInput.value) validationPassed = false;
-            variants.push({ name: nameInput.value.trim(), price: parseFloat(priceInput.value) });
-        });
-        if(!validationPassed){ showSimpleModal("Error", "Please fill all variant name and price fields."); return; }
-        const data = { name: form.elements.name.value, description: form.elements.description.value, imageUrl: form.elements.imageUrl.value, variants: variants, price: variants[0] ? variants[0].price : 0 };
-        const menuRef = db.collection('restaurants').doc(currentUser.restaurantId).collection('menu');
-        if (form.elements.itemId.value) await menuRef.doc(form.elements.itemId.value).update(data);
-        else { data.isAvailable = true; await menuRef.add(data); }
-        closeModal();
+    variantsContainer.addEventListener('click', e => {
+        if (e.target.classList.contains('remove-variant-btn')) {
+            e.target.closest('.variant-row').remove();
+        }
     });
+
+    form.addEventListener('submit', handleSaveMenuItem);
+}
+
+async function handleSaveMenuItem(e) {
+    e.preventDefault();
+    const form = e.target;
+    const restaurantId = currentUser.restaurantId;
+    const itemId = form.elements.itemId.value;
+
+    const selectedCategoryValue = form.elements.category.value;
+    let finalCategoryName = '';
+
+    if (selectedCategoryValue === 'add_new') {
+        const newCategoryName = form.elements.newCategoryName.value.trim();
+        if (!newCategoryName) {
+            showToast("New category name cannot be empty.", "error");
+            return;
+        }
+        await db.collection('menuCategories').add({ name: newCategoryName });
+        finalCategoryName = newCategoryName;
+        showToast(`New category "${newCategoryName}" created!`, 'success');
+    } else {
+        finalCategoryName = selectedCategoryValue;
+    }
+    
+    const variants = [];
+    form.querySelectorAll('.variant-row').forEach(row => {
+        variants.push({
+            name: row.children[0].value,
+            price: parseFloat(row.children[1].value)
+        });
+    });
+
+    const data = {
+        name: form.elements.name.value,
+        category: finalCategoryName,
+        description: form.elements.description.value,
+        imageUrl: form.elements.imageUrl.value,
+        isVeg: form.elements.isVeg.checked,
+        variants: variants,
+        price: variants[0] ? variants[0].price : 0,
+    };
+
+    if (itemId) {
+        await db.collection('restaurants').doc(restaurantId).collection('menu').doc(itemId).update(data);
+        showToast("Menu item updated!");
+    } else {
+        data.isAvailable = true; // Default to available on creation
+        await db.collection('restaurants').doc(restaurantId).collection('menu').add(data);
+        showToast("New menu item added!");
+    }
+    closeModal();
 }
 
 function handleDeleteMenuItem(itemId) {
@@ -653,16 +951,55 @@ async function toggleRestaurantOpen(isOpen) {
 }
 
 async function renderRestaurantProfile(contentArea) {
+     destroyCharts();
      const restDoc = await db.collection('restaurants').doc(currentUser.restaurantId).get();
      const restaurant = restDoc.data();
      contentArea.innerHTML = `
         <h2 class="text-3xl font-bold font-serif mb-6">Restaurant Profile</h2>
         <div class="bg-white p-6 rounded-xl shadow-md space-y-4">
             <form id="restaurant-profile-form" class="space-y-4">
-                <input type="text" name="name" class="input-field w-full" value="${restaurant.name}" required><input type="text" name="cuisine" class="input-field w-full" value="${restaurant.cuisine}" required><textarea name="address" class="input-field w-full" rows="3" required>${restaurant.address}</textarea><textarea name="imageUrls" class="input-field w-full" rows="3" placeholder="Image URLs, one per line">${(restaurant.imageUrls || []).join('\n')}</textarea>
-                <div class="flex gap-4 pt-2"><button type="submit" class="btn btn-primary">Save Changes</button><button type="button" id="change-password-btn" class="btn btn-secondary">Change Password</button></div>
+                <div>
+                    <label class="block text-sm font-medium">Name</label>
+                    <input type="text" name="name" class="input-field w-full" value="${restaurant.name}" required>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium">Cuisine</label>
+                    <input type="text" name="cuisine" class="input-field w-full" value="${restaurant.cuisine}" required>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium">Address</label>
+                    <textarea name="address" class="input-field w-full" rows="3" required>${restaurant.address}</textarea>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium">Phone Number</label>
+                    <input type="tel" name="mobile" class="input-field w-full" value="${restaurant.mobile || ''}" required>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium mb-2">Images</label>
+                    <input type="file" id="profile-image-uploader" accept="image/*" class="hidden" multiple>
+                    <button type="button" class="btn bg-gray-100 text-gray-800 font-semibold py-3 px-4 rounded-lg flex items-center gap-2 w-full justify-center border-2 border-dashed hover:bg-gray-200" onclick="document.getElementById('profile-image-uploader').click();">
+                        <i data-feather="upload-cloud" class="w-5 h-5"></i> 
+                        <span>Upload from Device</span>
+                    </button>
+                    <div class="upload-loader text-sm text-center py-2" style="display:none;">
+                        <div class="inline-block animate-spin rounded-full h-5 w-5 border-b-2 border-gray-900"></div>
+                        <span>Uploading...</span>
+                    </div>
+                    <div class="relative flex items-center my-2">
+                        <div class="flex-grow border-t border-gray-300"></div><span class="flex-shrink mx-4 text-gray-400 text-xs">OR</span><div class="flex-grow border-t border-gray-300"></div>
+                    </div>
+                    <textarea name="imageUrls" class="input-field w-full" rows="3" placeholder="Paste image URLs here (one per line)">${(restaurant.imageUrls || []).join('\n')}</textarea>
+                    <div id="image-preview-container" class="mt-2 flex flex-wrap gap-2"></div>
+                </div>
+                
+                <div class="flex flex-col sm:flex-row gap-4 pt-4 border-t">
+                    <button type="button" class="btn bg-gray-200 text-lg py-3 px-6" onclick="renderRestaurantView('profile')">Cancel</button>
+                    <button type="submit" class="btn btn-primary text-lg py-3 px-6">Save Changes</button>
+                </div>
             </form>
+
             <div class="border-t pt-4 space-y-3">
+                 <h3 class="text-xl font-bold font-serif mb-2">Settings</h3>
                  <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                     <label for="is-open" class="font-medium text-gray-700">Restaurant is Open</label>
                     <label class="relative inline-flex items-center cursor-pointer">
@@ -677,29 +1014,52 @@ async function renderRestaurantProfile(contentArea) {
                       <div class="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
                     </label>
                 </div>
+                <button data-action="change-password" class="btn btn-secondary w-full sm:w-auto py-2 px-4 mt-2">Change Password</button>
             </div>
         </div>`;
-    document.getElementById('restaurant-profile-form').addEventListener('submit', async (e) => {
+    feather.replace();
+        
+    const form = document.getElementById('restaurant-profile-form');
+    const uploader = document.getElementById('profile-image-uploader');
+    const imageUrlsTextarea = form.elements.imageUrls;
+    const loader = form.querySelector('.upload-loader');
+    const previewContainer = document.getElementById('image-preview-container');
+
+    uploader.addEventListener('change', (e) => handleImageUpload(e, imageUrlsTextarea, loader));
+
+    const updatePreview = () => {
+        previewContainer.innerHTML = '';
+        const urls = imageUrlsTextarea.value.split('\n').filter(url => url.trim() !== '');
+        urls.forEach(url => {
+            const img = document.createElement('img');
+            img.src = url;
+            img.className = 'w-20 h-20 object-cover rounded-md border';
+            img.onerror = () => { img.src = 'https://placehold.co/80x80?text=Invalid'; };
+            previewContainer.appendChild(img);
+        });
+    };
+    
+    imageUrlsTextarea.addEventListener('input', updatePreview);
+    updatePreview();
+
+    form.addEventListener('submit', async (e) => {
         e.preventDefault();
-        const form = e.target;
         const updatedData = { 
             name: form.elements.name.value, 
             cuisine: form.elements.cuisine.value, 
             address: form.elements.address.value, 
+            mobile: form.elements.mobile.value,
             imageUrls: form.elements.imageUrls.value.split('\n').filter(url => url.trim() !== ''), 
-            supportsDelivery: form.elements.supportsDelivery.checked 
+            supportsDelivery: document.getElementById('supports-delivery').checked 
         };
         await db.collection('restaurants').doc(currentUser.restaurantId).update(updatedData);
         showSimpleModal("Success", "Profile updated successfully!");
-    });
-    document.getElementById('change-password-btn').addEventListener('click', () => {
-        showConfirmationModal('Change Password?', 'A password reset link will be sent to your email.', () => {
-            auth.sendPasswordResetEmail(currentUser.email).then(() => showSimpleModal('Email Sent', 'Password reset email sent.')).catch(err => showSimpleModal('Error', err.message));
-        });
+        renderRestaurantView('profile');
     });
 }
 
 async function renderMyReviews(contentArea) {
+    destroyCharts();
     contentArea.innerHTML = `<h2 class="text-3xl font-bold font-serif mb-6">Customer Reviews</h2><div id="reviews-list">Loading...</div>`;
     const snapshot = await db.collection('reviews').where('restaurantId', '==', currentUser.restaurantId).get();
     if (snapshot.empty) { document.getElementById('reviews-list').innerHTML = '<p class="text-center bg-white p-6 rounded-lg">No reviews found.</p>'; return; }
@@ -778,6 +1138,7 @@ function closeModal() {
 }
 
 function cleanupListeners() {
+    destroyCharts();
     unsubscribeListeners.forEach(unsub => unsub());
     unsubscribeListeners = [];
 }
